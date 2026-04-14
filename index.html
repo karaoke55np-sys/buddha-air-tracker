@@ -1,0 +1,1597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Buddha Air">
+    <meta name="description" content="Real-time flight tracking for Buddha Air from Kathmandu (KMT)">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%233b82f6'/%3E%3Ctext x='50' y='67' font-size='50' text-anchor='middle' fill='white'%3E✈️%3C/text%3E%3C/svg%3E">
+    <title>Buddha Air · Flight Tracker | KTM Live</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --bg-primary: #0a0c15;
+            --glass-bg: rgba(18, 25, 45, 0.85);
+            --glass-border: rgba(59, 130, 246, 0.3);
+            --primary: #3b82f6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --revised: #8b5cf6;
+            --text-primary: #ffffff;
+            --text-secondary: #cbd5e1;
+            --text-muted: #64748b;
+            --border-light: rgba(255, 255, 255, 0.06);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0a0c15 0%, #0f121c 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+            50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2); }
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .app-wrapper { max-width: 1400px; margin: 0 auto; padding: 16px 20px; }
+
+        .modern-header {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 12px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .logo-section { display: flex; align-items: center; gap: 12px; }
+        .logo-icon {
+            width: 44px; height: 44px;
+            background: linear-gradient(135deg, var(--primary), var(--revised));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .logo-icon i { font-size: 22px; color: white; }
+        .logo-text h1 { font-size: 18px; font-weight: 700; background: linear-gradient(135deg, #fff, #60a5fa); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .logo-text p { font-size: 10px; color: var(--text-secondary); }
+
+        .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .live-badge { background: rgba(16, 185, 129, 0.2); border: 1px solid var(--success); padding: 5px 12px; border-radius: 30px; font-size: 10px; font-weight: 600; }
+        .time-card { background: rgba(0, 0, 0, 0.4); padding: 5px 12px; border-radius: 30px; font-family: monospace; font-size: 16px; font-weight: 600; }
+        .icon-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-light);
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .icon-btn:hover { background: var(--primary); transform: scale(1.05); }
+
+        .info-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .info-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            padding: 10px 12px;
+            text-align: center;
+        }
+        .info-card .label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .info-card .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+        .info-card .sub { font-size: 9px; color: var(--text-secondary); margin-top: 2px; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 20px;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover { transform: translateY(-2px); border-color: var(--glass-border); }
+        .stat-icon {
+            width: 40px; height: 40px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.1));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .stat-icon.primary { color: var(--primary); }
+        .stat-icon.success { color: var(--success); }
+        .stat-icon.warning { color: var(--warning); }
+        .stat-icon.revised { color: var(--revised); }
+        .stat-info h2 { font-size: 22px; font-weight: 700; }
+        .stat-info p { font-size: 9px; color: var(--text-muted); }
+
+        .control-bar {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 50px;
+            padding: 8px 16px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .search-wrapper {
+            flex: 2;
+            min-width: 180px;
+            position: relative;
+        }
+        .search-wrapper i {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+        .search-wrapper input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-light);
+            border-radius: 30px;
+            padding: 8px 12px 8px 32px;
+            color: white;
+            font-size: 12px;
+        }
+
+        .filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
+        .filter-chip {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-light);
+            padding: 5px 12px;
+            border-radius: 30px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .filter-chip:hover { background: rgba(59, 130, 246, 0.2); color: white; }
+        .filter-chip.active { background: var(--primary); color: white; }
+
+        .view-toggle { display: flex; gap: 4px; background: rgba(0, 0, 0, 0.3); padding: 3px; border-radius: 10px; }
+        .view-btn {
+            background: transparent; border: none;
+            width: 30px; height: 30px;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .view-btn.active { background: var(--primary); color: white; }
+
+        .flights-grid.list-view { display: flex; flex-direction: column; gap: 8px; }
+        
+        .flights-grid.list-view .flight-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 14px;
+            transition: all 0.2s ease;
+        }
+        
+        .flights-grid.list-view .flight-card:hover { transform: translateX(4px); border-color: var(--glass-border); }
+        
+        .flights-grid.list-view .flight-header { 
+            display: flex; 
+            align-items: center; 
+            gap: 12px; 
+            margin-bottom: 0;
+            flex: 2;
+        }
+        
+        .flights-grid.list-view .flight-number { 
+            font-size: 15px; 
+            font-weight: 700; 
+            min-width: 70px;
+        }
+        
+        .flights-grid.list-view .flight-route { 
+            display: none; 
+        }
+        
+        .flights-grid.list-view .gate-badge { 
+            font-size: 9px; 
+            padding: 3px 8px;
+            background: rgba(59, 130, 246, 0.15);
+        }
+        
+        .flights-grid.list-view .flight-body { 
+            display: flex; 
+            align-items: center; 
+            gap: 12px; 
+            margin-bottom: 0;
+            flex: 1;
+        }
+        
+        .flights-grid.list-view .flight-time { 
+            font-size: 13px; 
+            font-weight: 600;
+            min-width: 60px;
+        }
+        
+        .flights-grid.list-view .flight-time i { font-size: 10px; }
+        
+        .flights-grid.list-view .status-badge { 
+            padding: 3px 10px; 
+            font-size: 9px;
+            min-width: 65px;
+            text-align: center;
+        }
+        
+        .flights-grid.list-view .remarks { display: none; }
+        
+        .flights-grid.list-view .flight-footer { 
+            padding-top: 0; 
+            margin-top: 0; 
+            border-top: none;
+            flex: 1;
+            justify-content: flex-end;
+        }
+        
+        .flights-grid.list-view .flight-destination { display: none; }
+        
+        .flights-grid.list-view .alert-btn { 
+            padding: 4px 12px; 
+            font-size: 10px;
+        }
+
+        .flights-grid.tile-view { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+            gap: 12px; 
+        }
+
+        .flight-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            padding: 14px;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        .flight-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3); }
+        .flight-card.boarding-card { border-left: 3px solid var(--warning); animation: pulse 2s infinite; }
+        .flight-card.revised-card { border-left: 3px solid var(--revised); }
+
+        .flight-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+        .flight-number { font-size: 16px; font-weight: 700; }
+        .gate-badge { background: rgba(59, 130, 246, 0.2); padding: 3px 8px; border-radius: 20px; font-size: 9px; font-weight: 600; color: #60a5fa; }
+        .flight-route { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+        .flight-details { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+        .flight-time { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .flight-time i { font-size: 11px; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+        .status-badge.on-time { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .status-badge.boarding { background: rgba(245, 158, 11, 0.15); color: var(--warning); animation: pulse 1.5s infinite; }
+        .status-badge.revised { background: rgba(139, 92, 246, 0.15); color: var(--revised); }
+        .remarks { background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 8px; margin-bottom: 10px; font-size: 10px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+        .flight-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid var(--border-light); }
+        .flight-destination { font-size: 11px; display: flex; align-items: center; gap: 5px; }
+        .alert-btn {
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid var(--glass-border);
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .alert-btn.active { background: var(--primary); color: white; }
+
+        .notification-panel {
+            position: fixed;
+            top: 70px;
+            right: 10px;
+            width: 320px;
+            max-height: 450px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            z-index: 10001;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .notification-panel.show { display: flex; }
+        .notification-header {
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .notification-header h4 { font-size: 13px; }
+        .notification-list { max-height: 350px; overflow-y: auto; padding: 8px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 6px;
+            border-left: 2px solid var(--primary);
+            cursor: pointer;
+        }
+        .notification-item.unread { background: rgba(59, 130, 246, 0.15); }
+        .notification-title { font-weight: 600; font-size: 11px; }
+        .notification-time { font-size: 9px; color: var(--text-muted); margin-top: 4px; }
+
+        .notif-bell { position: relative; cursor: pointer; }
+        .notif-count {
+            position: absolute;
+            top: -5px; right: -5px;
+            background: var(--danger);
+            border-radius: 50%;
+            min-width: 16px;
+            height: 16px;
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 3px;
+        }
+
+        .history-section {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-light);
+            border-radius: 20px;
+            padding: 16px;
+            margin-top: 20px;
+        }
+        .history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+        .history-header h3 { font-size: 14px; }
+        .history-log { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; max-height: 250px; overflow-y: auto; }
+        .history-item { background: rgba(255, 255, 255, 0.03); border-radius: 12px; padding: 10px; border-left: 2px solid var(--primary); font-size: 11px; }
+
+        .settings-panel {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 90%; max-width: 400px;
+            background: #1a1f2e;
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 20px;
+            z-index: 100002;
+            display: none;
+        }
+        .settings-panel.show { display: block; }
+        .setting-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-light); }
+        .setting-item label { font-size: 13px; display: flex; align-items: center; gap: 8px; }
+        .toggle-switch {
+            width: 44px; height: 22px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 30px;
+            cursor: pointer;
+            position: relative;
+        }
+        .toggle-switch.active { background: var(--primary); }
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 18px; height: 18px;
+            background: white;
+            border-radius: 50%;
+            top: 2px; left: 3px;
+            transition: 0.3s;
+        }
+        .toggle-switch.active::after { left: 23px; }
+        .settings-close {
+            position: absolute; top: 15px; right: 15px;
+            background: none; border: none;
+            color: var(--text-secondary);
+            font-size: 20px;
+            cursor: pointer;
+        }
+        .overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 100001;
+            display: none;
+        }
+        .overlay.show { display: block; }
+
+        .footer {
+            margin-top: 20px;
+            padding: 12px;
+            text-align: center;
+            border-top: 1px solid var(--border-light);
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+        .footer .credit {
+            margin-top: 4px;
+            font-size: 9px;
+            color: var(--primary);
+        }
+
+        .empty-state { text-align: center; padding: 40px; color: var(--text-muted); grid-column: 1/-1; }
+        .refresh-spin { animation: spin 0.5s linear; }
+
+        /* ==================== CHAT MODAL STYLES ==================== */
+        .chat-modal {
+            position: fixed;
+            bottom: 0;
+            right: 0;
+            width: 400px;
+            height: 550px;
+            background: #1a1f2e;
+            border-radius: 16px 16px 0 0;
+            display: none;
+            flex-direction: column;
+            box-shadow: -5px -5px 30px rgba(0,0,0,0.3);
+            z-index: 1000;
+            animation: slideUp 0.3s ease;
+        }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .chat-modal.open { display: flex; }
+        .chat-header {
+            padding: 12px 16px;
+            background: #0f121c;
+            border-radius: 16px 16px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .chat-header-left { display: flex; align-items: center; gap: 8px; }
+        .online-status { width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: pulse-green 2s infinite; }
+        @keyframes pulse-green { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 8px 12px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.1);
+            animation: fadeIn 0.2s ease;
+            position: relative;
+        }
+        .message.own { align-self: flex-end; background: #3b82f6; }
+        .message-name { font-size: 10px; opacity: 0.7; margin-bottom: 3px; display: flex; justify-content: space-between; }
+        .message-text { font-size: 13px; word-wrap: break-word; }
+        .message-time { font-size: 8px; color: #aaa; margin-top: 3px; }
+        .edited-badge { font-size: 8px; color: #aaa; margin-left: 5px; font-style: italic; }
+        .reply-preview { background: rgba(0,0,0,0.3); border-left: 2px solid #3b82f6; padding: 4px 8px; border-radius: 6px; margin-bottom: 5px; font-size: 10px; }
+        .reply-to-name { color: #3b82f6; font-weight: 500; }
+        
+        .message-actions {
+            position: absolute; right: 5px; top: -30px; background: #2a2a3a; border-radius: 20px; padding: 4px 8px; display: none; gap: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); z-index: 10;
+        }
+        .message:hover .message-actions { display: flex; }
+        .msg-action-btn { background: none; border: none; color: #fff; cursor: pointer; font-size: 11px; padding: 4px; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; }
+        .msg-action-btn:hover { background: #3b82f6; }
+        
+        .reply-indicator {
+            background: rgba(59,130,246,0.15);
+            padding: 8px 12px;
+            font-size: 11px;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(59,130,246,0.3);
+        }
+        .cancel-reply { background: rgba(239,68,68,0.2); border: none; color: #ef4444; cursor: pointer; padding: 3px 10px; border-radius: 15px; font-size: 10px; }
+        
+        .chat-input-area {
+            padding: 12px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            gap: 8px;
+        }
+        .chat-input {
+            flex: 1;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.1);
+            border: none;
+            border-radius: 20px;
+            color: white;
+            outline: none;
+            font-size: 12px;
+        }
+        .send-btn { background: #3b82f6; border: none; padding: 8px 16px; border-radius: 20px; color: white; cursor: pointer; font-size: 12px; }
+        .typing { font-size: 10px; color: #888; padding: 4px 12px; }
+        
+        .edit-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e1e2e;
+            padding: 20px;
+            border-radius: 16px;
+            width: 320px;
+            z-index: 2001;
+            display: none;
+            border: 1px solid #3b82f6;
+        }
+        .edit-modal.show { display: block; }
+        .edit-modal h3 { font-size: 16px; margin-bottom: 12px; color: #3b82f6; }
+        .edit-modal input { width: 100%; padding: 10px; margin: 8px 0; background: rgba(255,255,255,0.1); border: 1px solid #3b82f6; border-radius: 10px; color: white; }
+        .edit-modal button { padding: 8px 16px; background: #3b82f6; border: none; border-radius: 10px; color: white; cursor: pointer; margin-right: 8px; }
+        
+        .login-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1a1f2e;
+            padding: 24px;
+            border-radius: 20px;
+            width: 340px;
+            z-index: 2000;
+            display: none;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .login-modal.show { display: block; }
+        .login-modal h3 { text-align: center; margin-bottom: 16px; font-size: 18px; }
+        .login-modal input { width: 100%; padding: 10px; margin: 8px 0; background: rgba(255,255,255,0.1); border: none; border-radius: 10px; color: white; }
+        .login-modal button { width: 100%; padding: 10px; background: #3b82f6; border: none; border-radius: 10px; color: white; cursor: pointer; margin-top: 8px; }
+        .modal-close-btn { position: absolute; top: 12px; right: 12px; background: none; border: none; color: #9ca3af; font-size: 20px; cursor: pointer; }
+        .modal-close-btn:hover { color: white; }
+        .switch { text-align: center; margin-top: 12px; font-size: 11px; color: #3b82f6; cursor: pointer; }
+        .error-msg { color: #ef4444; font-size: 11px; text-align: center; margin-top: 8px; }
+        .success-msg { color: #10b981; font-size: 11px; text-align: center; margin-top: 8px; }
+
+        @media (max-width: 768px) {
+            .app-wrapper { padding: 10px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .info-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .control-bar { flex-direction: column; border-radius: 20px; align-items: stretch; }
+            .search-wrapper { width: 100%; }
+            .filter-group { justify-content: center; }
+            .chat-modal { width: 100%; height: 80vh; }
+            .login-modal { width: 90%; }
+            .flights-grid.list-view .flight-card {
+                flex-wrap: wrap;
+                padding: 8px 12px;
+            }
+            .flights-grid.list-view .flight-header { flex: 1 1 100%; margin-bottom: 6px; }
+            .flights-grid.list-view .flight-body { flex: 1 1 auto; }
+            .flights-grid.list-view .flight-footer { flex: 1 1 auto; }
+            .flights-grid.tile-view { grid-template-columns: 1fr; gap: 10px; }
+            .notification-panel { width: calc(100vw - 20px); right: 10px; left: 10px; top: 60px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-wrapper">
+    <div class="modern-header">
+        <div class="logo-section">
+            <div class="logo-icon"><i class="fas fa-fan"></i></div>
+            <div class="logo-text">
+                <h1>Buddha Air · Flight Hub</h1>
+                <p><i class="fas fa-map-marker-alt"></i> Kathmandu (KTM) · Live</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <div class="live-badge"><i class="fas fa-circle"></i> LIVE</div>
+            <div class="time-card" id="liveClock">--:--:--</div>
+            <div class="notif-bell" id="notifBell">
+                <button class="icon-btn"><i class="fas fa-bell"></i></button>
+                <span class="notif-count" id="notifCount">0</span>
+            </div>
+            <button id="settingsBtn" class="icon-btn"><i class="fas fa-cog"></i></button>
+            <button id="refreshBtn" class="icon-btn"><i class="fas fa-sync-alt"></i></button>
+            <button id="chatBtn" class="icon-btn" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6);"><i class="fas fa-comments"></i></button>
+        </div>
+    </div>
+
+    <div class="info-row">
+        <div class="info-card"><div class="label"><i class="fas fa-clock"></i> Last Flight</div><div class="value" id="lastFlightTime">--:--</div><div class="sub" id="lastFlightDest">--</div></div>
+        <div class="info-card"><div class="label"><i class="fas fa-chart-line"></i> Avg Delay</div><div class="value" id="avgDelay">0</div><div class="sub">minutes</div></div>
+        <div class="info-card"><div class="label"><i class="fas fa-percent"></i> On-Time</div><div class="value" id="onTimePerf">0%</div><div class="sub">today</div></div>
+        <div class="info-card"><div class="label"><i class="fas fa-plane"></i> Total</div><div class="value" id="totalToday">0</div><div class="sub">flights</div></div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card" data-filter="all"><div class="stat-icon primary"><i class="fas fa-plane-departure"></i></div><div class="stat-info"><h2 id="totalFlights">0</h2><p>Total</p></div></div>
+        <div class="stat-card" data-filter="on-time"><div class="stat-icon success"><i class="fas fa-check-circle"></i></div><div class="stat-info"><h2 id="onTimeCount">0</h2><p>On Time</p></div></div>
+        <div class="stat-card" data-filter="boarding"><div class="stat-icon warning"><i class="fas fa-door-open"></i></div><div class="stat-info"><h2 id="boardingCount">0</h2><p>Boarding</p></div></div>
+        <div class="stat-card" data-filter="revised"><div class="stat-icon revised"><i class="fas fa-clock"></i></div><div class="stat-info"><h2 id="revisedCount">0</h2><p>Revised</p></div></div>
+    </div>
+
+    <div class="control-bar">
+        <div class="search-wrapper"><i class="fas fa-search"></i><input type="text" id="searchInput" placeholder="Flight or destination..."></div>
+        <div class="filter-group" id="filterGroup">
+            <button class="filter-chip active" data-filter="all">All</button>
+            <button class="filter-chip" data-filter="on-time">On Time</button>
+            <button class="filter-chip" data-filter="boarding">Boarding</button>
+            <button class="filter-chip" data-filter="revised">Revised/Delayed</button>
+        </div>
+        <div class="view-toggle">
+            <button class="view-btn active" data-view="list"><i class="fas fa-list"></i></button>
+            <button class="view-btn" data-view="tile"><i class="fas fa-th-large"></i></button>
+        </div>
+    </div>
+
+    <div id="flightsContainer">
+        <div class="flights-grid list-view" id="flightsGrid">
+            <div class="empty-state">
+                <i class="fas fa-spinner fa-pulse fa-2x"></i>
+                <p style="margin-top: 12px;">Loading flight data...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="history-section">
+        <div class="history-header"><h3><i class="fas fa-history"></i> Activity Log</h3><div><input type="date" id="historyDateFilter" style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-light); border-radius: 20px; padding: 5px 10px; color: white; font-size: 11px;"></div></div>
+        <div id="historyLog" class="history-log"></div>
+    </div>
+
+    <div class="footer">
+        <p>✈️ Real-time data from Buddha Air Desk | Updates every 30s</p>
+        <div class="credit">Redesigned by <strong>S. Khadgi</strong></div>
+    </div>
+</div>
+
+<div id="notificationPanel" class="notification-panel">
+    <div class="notification-header"><h4><i class="fas fa-bell"></i> Notifications</h4><button id="markAllRead" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 11px;">Mark all read</button></div>
+    <div id="notificationList" class="notification-list"></div>
+</div>
+
+<div id="settingsPanel" class="settings-panel">
+    <button id="closeSettings" class="settings-close">&times;</button>
+    <h3 style="font-size: 16px; margin-bottom: 16px;"><i class="fas fa-sliders-h"></i> Settings</h3>
+    <div class="setting-item"><label><i class="fas fa-bell"></i> Desktop Notifications</label><div id="notifToggle" class="toggle-switch"></div></div>
+    <div class="setting-item"><label><i class="fas fa-trash-alt"></i> Clear All History</label><button id="clearHistory" style="background: #ef4444; border: none; padding: 6px 14px; border-radius: 8px; color: white; cursor: pointer; font-size: 12px;">Clear</button></div>
+</div>
+<div id="overlay" class="overlay"></div>
+
+<!-- Chat Modal -->
+<div class="chat-modal" id="chatModal">
+    <div class="chat-header">
+        <div class="chat-header-left">
+            <div class="online-status"></div>
+            <strong style="font-size: 14px;">Team Chat</strong>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button id="logoutFromChatBtn" class="icon-btn" style="width: 30px; height: 30px; background: rgba(239,68,68,0.2); color: #ef4444;"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="closeChat" class="icon-btn" style="width: 30px; height: 30px;">×</button>
+        </div>
+    </div>
+    <div class="reply-indicator" id="replyIndicator">
+        <span><i class="fas fa-reply"></i> Replying to <span id="replyingToName"></span></span>
+        <button class="cancel-reply" id="cancelReplyBtn">Cancel</button>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="typing" id="typingIndicator"></div>
+    <div class="chat-input-area">
+        <input type="text" class="chat-input" id="chatInput" placeholder="Type a message...">
+        <button class="send-btn" id="sendBtn">Send</button>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="edit-modal" id="editModal">
+    <h3>Edit Message</h3>
+    <input type="text" id="editInput" placeholder="Edit your message...">
+    <button id="saveEditBtn">Save</button>
+    <button id="cancelEditBtn">Cancel</button>
+</div>
+
+<!-- Login Modal -->
+<div class="login-modal" id="loginModal">
+    <button class="modal-close-btn" id="closeLoginModal">&times;</button>
+    <h3>🔐 Login to Chat</h3>
+    <input type="text" id="loginUsername" placeholder="Username">
+    <input type="password" id="loginPassword" placeholder="Password">
+    <button id="doLogin">Login</button>
+    <div class="switch" id="showRegister">New user? Create account</div>
+    <div class="switch" id="showForgot">Forgot password?</div>
+    <div id="loginError" class="error-msg"></div>
+</div>
+
+<!-- Register Modal -->
+<div class="login-modal" id="registerModal">
+    <button class="modal-close-btn" id="closeRegisterModal">&times;</button>
+    <h3>📝 Create Account</h3>
+    <input type="text" id="regUsername" placeholder="Username">
+    <input type="text" id="regDisplayName" placeholder="Display Name (optional)">
+    <input type="password" id="regPassword" placeholder="Password">
+    <button id="doRegister">Register</button>
+    <div class="switch" id="showLogin">Already have an account? Login</div>
+    <div id="registerError" class="error-msg"></div>
+    <div id="registerSuccess" class="success-msg"></div>
+</div>
+
+<!-- Forgot Password Modal -->
+<div class="login-modal" id="forgotModal">
+    <button class="modal-close-btn" id="closeForgotModal">&times;</button>
+    <h3>🔑 Reset Password</h3>
+    <p style="font-size: 11px; color: #888; text-align: center; margin-bottom: 12px;">Enter your username to reset password</p>
+    <input type="text" id="forgotUsername" placeholder="Username">
+    <button id="doForgot">Verify & Reset</button>
+    <div class="switch" id="showLoginFromForgot">Back to Login</div>
+    <div id="forgotError" class="error-msg"></div>
+    <div id="forgotSuccess" class="success-msg"></div>
+</div>
+
+<!-- Reset Password Modal -->
+<div class="login-modal" id="resetModal">
+    <button class="modal-close-btn" id="closeResetModal">&times;</button>
+    <h3>🔐 Set New Password</h3>
+    <p style="font-size: 11px; color: #888; text-align: center; margin-bottom: 12px;" id="resetUserDisplay"></p>
+    <input type="password" id="newPassword" placeholder="New Password">
+    <input type="password" id="confirmPassword" placeholder="Confirm Password">
+    <button id="doReset">Reset Password</button>
+    <div id="resetError" class="error-msg"></div>
+    <div id="resetSuccess" class="success-msg"></div>
+</div>
+
+<script>
+    // ==================== FLIGHT TRACKER STATE ====================
+    let flights = [], previousFlights = [], currentFilter = 'all', searchQuery = '', currentView = 'list';
+    let notificationsList = [], flightHistory = [], trackedFlights = new Set();
+    let desktopNotificationsEnabled = false;
+    let lastNotificationId = 0;
+    
+    // ==================== CHAT STATE ====================
+    let socket = null;
+    let currentUser = null;
+    let messages = [];
+    let pendingResetUser = null;
+    let replyingTo = null;
+    let editingMessageId = null;
+    let autoLoginAttempted = false;
+    
+    // DOM Elements
+    const flightsGrid = document.getElementById('flightsGrid');
+    const searchInput = document.getElementById('searchInput');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const historyDateInput = document.getElementById('historyDateFilter');
+    const notifBell = document.getElementById('notifBell');
+    const notificationPanel = document.getElementById('notificationPanel');
+    const notifCount = document.getElementById('notifCount');
+    const chatBtn = document.getElementById('chatBtn');
+    const chatModal = document.getElementById('chatModal');
+    const loginModal = document.getElementById('loginModal');
+    const registerModal = document.getElementById('registerModal');
+    const forgotModal = document.getElementById('forgotModal');
+    const resetModal = document.getElementById('resetModal');
+    const editModal = document.getElementById('editModal');
+    const messagesDiv = document.getElementById('messages');
+    const chatInput = document.getElementById('chatInput');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const replyIndicator = document.getElementById('replyIndicator');
+    const replyingToName = document.getElementById('replyingToName');
+    
+    const API_URL = '/api/flights';
+    
+    // ==================== FLIGHT TRACKER FUNCTIONS ====================
+    function updateLiveClock() {
+        document.getElementById('liveClock').innerText = new Date().toLocaleTimeString('en-GB');
+    }
+    setInterval(updateLiveClock, 1000);
+    updateLiveClock();
+    
+    function updateInfoCards() {
+        if (!flights.length) {
+            document.getElementById('lastFlightTime').innerText = '--:--';
+            document.getElementById('lastFlightDest').innerText = '--';
+            document.getElementById('avgDelay').innerText = '0';
+            document.getElementById('onTimePerf').innerText = '0%';
+            document.getElementById('totalToday').innerText = '0';
+            return;
+        }
+        const last = [...flights].sort((a,b) => b.time.localeCompare(a.time))[0];
+        document.getElementById('lastFlightTime').innerText = last.time;
+        document.getElementById('lastFlightDest').innerText = last.destination;
+        document.getElementById('avgDelay').innerText = '0';
+        const onTimePct = flights.length ? Math.round((flights.filter(f => f.status === 'On Time').length / flights.length) * 100) : 0;
+        document.getElementById('onTimePerf').innerText = onTimePct + '%';
+        document.getElementById('totalToday').innerText = flights.length;
+    }
+    
+    function updateStats() {
+        document.getElementById('totalFlights').innerText = flights.length;
+        document.getElementById('onTimeCount').innerText = flights.filter(f => f.status === 'On Time').length;
+        document.getElementById('boardingCount').innerText = flights.filter(f => f.status === 'Boarding').length;
+        document.getElementById('revisedCount').innerText = flights.filter(f => f.status === 'Revised' || f.status === 'Delayed').length;
+    }
+    
+    function detectChanges() {
+        if (!previousFlights.length) return;
+        
+        previousFlights.forEach(prev => {
+            if (!flights.some(f => f.id === prev.id)) {
+                const msg = `${prev.flightNumber} to ${prev.destination} has DEPARTED`;
+                addNotification('Flight Departed', msg, 'departed', prev.flightNumber);
+                addToHistory(prev, 'Departed', msg);
+            }
+        });
+        
+        flights.forEach(flight => {
+            if (!previousFlights.some(p => p.id === flight.id)) {
+                const msg = `✈️ New flight: ${flight.flightNumber} to ${flight.destination} at ${flight.time}`;
+                addNotification('New Flight Added', msg, 'added', flight.flightNumber);
+                addToHistory(flight, 'Added', msg);
+            }
+        });
+        
+        flights.forEach(flight => {
+            const prev = previousFlights.find(p => p.id === flight.id);
+            if (prev && prev.status !== flight.status) {
+                let msg = '', notifType = '';
+                if (flight.status === 'Boarding') {
+                    msg = `🔴 ${flight.flightNumber} to ${flight.destination} is NOW BOARDING at Gate ${flight.gate}`;
+                    notifType = 'boarding';
+                    addNotification('NOW BOARDING', msg, notifType, flight.flightNumber);
+                    addToHistory(flight, 'Boarding', msg);
+                } else if (flight.status === 'Revised') {
+                    msg = `🔄 ${flight.flightNumber} to ${flight.destination} schedule REVISED`;
+                    notifType = 'revised';
+                    addNotification('Flight Revised', msg, notifType, flight.flightNumber);
+                    addToHistory(flight, 'Revised', msg);
+                } else if (flight.status === 'Delayed') {
+                    msg = `⚠️ ${flight.flightNumber} to ${flight.destination} DELAYED`;
+                    notifType = 'delayed';
+                    addNotification('Flight Delayed', msg, notifType, flight.flightNumber);
+                    addToHistory(flight, 'Delayed', msg);
+                }
+            }
+        });
+    }
+    
+    async function fetchFlights() {
+        try {
+            const res = await fetch(API_URL);
+            const data = await res.json();
+            if (data.success && data.flights !== undefined) {
+                previousFlights = [...flights];
+                flights = data.flights;
+                detectChanges();
+                updateStats();
+                updateInfoCards();
+                applyFiltersAndRender();
+            }
+        } catch(e) { console.error(e); }
+    }
+    
+    function applyFiltersAndRender() {
+        let filtered = [...flights];
+        if (currentFilter === 'on-time') filtered = filtered.filter(f => f.status === 'On Time');
+        else if (currentFilter === 'boarding') filtered = filtered.filter(f => f.status === 'Boarding');
+        else if (currentFilter === 'revised') filtered = filtered.filter(f => f.status === 'Revised' || f.status === 'Delayed');
+        
+        if (searchQuery.trim()) {
+            const q = searchQuery.toLowerCase();
+            filtered = filtered.filter(f => f.flightNumber.toLowerCase().includes(q) || f.destination.toLowerCase().includes(q));
+        }
+        
+        filtered.sort((a, b) => a.time.localeCompare(b.time));
+        renderFlights(filtered);
+    }
+    
+    function renderFlights(list) {
+        if (!list.length) {
+            flightsGrid.innerHTML = '<div class="empty-state"><i class="fas fa-clock fa-2x" style="margin-bottom: 10px;"></i><h3 style="font-size: 16px;">No Flights</h3><p style="font-size: 12px;">Check back later for updates</p></div>';
+            return;
+        }
+        
+        const viewClass = currentView === 'tile' ? 'tile-view' : 'list-view';
+        flightsGrid.className = `flights-grid ${viewClass}`;
+        
+        flightsGrid.innerHTML = list.map(flight => {
+            const isBoarding = flight.status === 'Boarding';
+            const isRevised = flight.status === 'Revised' || flight.status === 'Delayed';
+            let cardClass = 'flight-card';
+            if (isBoarding) cardClass += ' boarding-card';
+            if (isRevised) cardClass += ' revised-card';
+            
+            let statusClass = 'on-time';
+            let statusText = flight.status;
+            if (isBoarding) statusClass = 'boarding';
+            if (isRevised) statusClass = 'revised';
+            
+            const tracked = trackedFlights.has(flight.flightNumber);
+            
+            if (currentView === 'list') {
+                return `
+                    <div class="${cardClass}">
+                        <div class="flight-header">
+                            <span class="flight-number">${escapeHtml(flight.flightNumber)}</span>
+                            <span class="gate-badge">Gate ${escapeHtml(flight.gate || 'TBD')}</span>
+                        </div>
+                        <div class="flight-body">
+                            <span class="flight-time"><i class="far fa-clock"></i> ${flight.time}</span>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </div>
+                        <div class="flight-footer">
+                            <button class="alert-btn ${tracked ? 'active' : ''}" onclick="toggleTrackFlight('${flight.flightNumber.replace(/'/g, "\\'")}', this)">
+                                <i class="fas ${tracked ? 'fa-check' : 'fa-bell'}"></i> ${tracked ? 'Tracking' : 'Alert'}
+                            </button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                return `
+                    <div class="${cardClass}">
+                        <div class="flight-header">
+                            <span class="flight-number">${escapeHtml(flight.flightNumber)}</span>
+                            <span class="gate-badge">Gate ${escapeHtml(flight.gate || 'TBD')}</span>
+                        </div>
+                        <div class="flight-route"><i class="fas fa-map-marker-alt"></i> KTM → ${escapeHtml(flight.destination)}</div>
+                        <div class="flight-details">
+                            <span class="flight-time"><i class="far fa-clock"></i> ${flight.time}</span>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </div>
+                        <div class="remarks"><i class="fas fa-info-circle"></i> ${escapeHtml(flight.remarks || 'Scheduled')}</div>
+                        <div class="flight-footer">
+                            <span class="flight-destination"><i class="fas fa-location-dot"></i> ${escapeHtml(flight.destination)}</span>
+                            <button class="alert-btn ${tracked ? 'active' : ''}" onclick="toggleTrackFlight('${flight.flightNumber.replace(/'/g, "\\'")}', this)">
+                                <i class="fas ${tracked ? 'fa-check' : 'fa-bell'}"></i> ${tracked ? 'Tracking' : 'Alert'}
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }).join('');
+    }
+    
+    function toggleTrackFlight(flightNumber, btn) {
+        if (trackedFlights.has(flightNumber)) {
+            trackedFlights.delete(flightNumber);
+            btn.classList.remove('active');
+            btn.innerHTML = '<i class="fas fa-bell"></i> Alert';
+            addNotification('Alert Disabled', `No more alerts for ${flightNumber}`, 'info');
+        } else {
+            trackedFlights.add(flightNumber);
+            btn.classList.add('active');
+            btn.innerHTML = '<i class="fas fa-check"></i> Tracking';
+            addNotification('Alert Enabled', `You will now receive alerts for ${flightNumber}`, 'boarding');
+        }
+        localStorage.setItem('trackedFlights', JSON.stringify([...trackedFlights]));
+    }
+    
+    // ==================== NOTIFICATIONS ====================
+    async function requestNotificationPermission() {
+        if (!('Notification' in window)) return false;
+        if (Notification.permission === 'granted') return true;
+        if (Notification.permission !== 'denied') {
+            const permission = await Notification.requestPermission();
+            return permission === 'granted';
+        }
+        return false;
+    }
+    
+    function sendDesktopNotification(title, body) {
+        if (!desktopNotificationsEnabled) return;
+        if (Notification.permission === 'granted') {
+            try {
+                new Notification(title, {
+                    body: body,
+                    icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Crect width="100" height="100" fill="%233b82f6"/%3E%3Ctext x="50" y="67" font-size="50" text-anchor="middle" fill="white"%3E✈️%3C/text%3E%3C/svg%3E',
+                    requireInteraction: true,
+                    vibrate: [200, 100, 200]
+                });
+            } catch(e) { console.log(e); }
+        }
+    }
+    
+    function addNotification(title, message, type = 'info', flightRef = null) {
+        lastNotificationId++;
+        const notification = {
+            id: lastNotificationId,
+            title, message, type, flight: flightRef,
+            timestamp: new Date().toISOString(),
+            read: false
+        };
+        notificationsList.unshift(notification);
+        if (notificationsList.length > 200) notificationsList.pop();
+        localStorage.setItem('notificationsList', JSON.stringify(notificationsList));
+        renderNotifications();
+        
+        const importantTypes = ['boarding', 'revised', 'delayed', 'added', 'departed'];
+        if (importantTypes.includes(type)) {
+            sendDesktopNotification(title, message);
+        }
+    }
+    
+    function renderNotifications() {
+        const unreadCount = notificationsList.filter(n => !n.read).length;
+        notifCount.innerText = unreadCount;
+        notifCount.style.display = unreadCount > 0 ? 'flex' : 'none';
+        
+        const container = document.getElementById('notificationList');
+        if (!notificationsList.length) {
+            container.innerHTML = '<div style="text-align: center; padding: 30px; font-size: 12px;">No notifications</div>';
+            return;
+        }
+        container.innerHTML = notificationsList.slice(0, 50).map(n => `
+            <div class="notification-item ${!n.read ? 'unread' : ''}" onclick="markNotificationRead(${n.id})">
+                <div class="notification-title">${escapeHtml(n.title)}</div>
+                <div class="notification-time">${new Date(n.timestamp).toLocaleString()}</div>
+            </div>
+        `).join('');
+    }
+    
+    window.markNotificationRead = function(id) {
+        const n = notificationsList.find(n => n.id === id);
+        if (n) n.read = true;
+        localStorage.setItem('notificationsList', JSON.stringify(notificationsList));
+        renderNotifications();
+    };
+    
+    function markAllRead() {
+        notificationsList.forEach(n => n.read = true);
+        localStorage.setItem('notificationsList', JSON.stringify(notificationsList));
+        renderNotifications();
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    // ==================== HISTORY ====================
+    function addToHistory(flight, changeType, message) {
+        flightHistory.unshift({
+            id: Date.now(),
+            flight: flight.flightNumber,
+            destination: flight.destination,
+            time: flight.time,
+            date: new Date().toISOString(),
+            status: changeType,
+            message
+        });
+        if (flightHistory.length > 500) flightHistory.pop();
+        localStorage.setItem('flightHistoryData', JSON.stringify(flightHistory));
+        renderHistory();
+    }
+    
+    function renderHistory() {
+        const selectedDate = historyDateInput.value || new Date().toISOString().split('T')[0];
+        const filtered = flightHistory.filter(h => h.date.split('T')[0] === selectedDate);
+        const log = document.getElementById('historyLog');
+        if (!filtered.length) {
+            log.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:30px;font-size:12px;">No activity</div>';
+            return;
+        }
+        log.innerHTML = filtered.slice(0, 30).map(h => `
+            <div class="history-item">
+                <div style="display:flex;justify-content:space-between;">
+                    <strong>${escapeHtml(h.flight)}</strong>
+                    <span style="font-size:9px;background:rgba(59,130,246,0.2);padding:2px 6px;border-radius:10px;">${escapeHtml(h.status)}</span>
+                </div>
+                <div style="font-size:11px;margin-top:4px;">${escapeHtml(h.destination)} · ${h.time}</div>
+                <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${escapeHtml(h.message)}</div>
+                <div style="font-size:9px;color:#64748b;margin-top:4px;">${new Date(h.date).toLocaleTimeString()}</div>
+            </div>
+        `).join('');
+    }
+    
+    // ==================== CHAT FUNCTIONS ====================
+    function saveUserToStorage(user, password) {
+        localStorage.setItem('chatUser', JSON.stringify({
+            id: user.id, username: user.username, displayName: user.displayName,
+            isAdmin: user.isAdmin, password: password, savedAt: Date.now()
+        }));
+        console.log('✅ User saved to storage:', user.username);
+    }
+    
+    function loadUserFromStorage() {
+        const saved = localStorage.getItem('chatUser');
+        if (saved) {
+            try {
+                const user = JSON.parse(saved);
+                console.log('📦 Loaded user from storage:', user.username);
+                return user;
+            } catch(e) { return null; }
+        }
+        return null;
+    }
+    
+    function clearUserFromStorage() { localStorage.removeItem('chatUser'); }
+    
+    function logout() {
+        if (socket) socket.disconnect();
+        currentUser = null;
+        clearUserFromStorage();
+        chatModal.classList.remove('open');
+        messages = [];
+        if (messagesDiv) messagesDiv.innerHTML = '<div style="text-align:center;padding:30px;color:#888;">No messages yet.</div>';
+        replyingTo = null;
+        replyIndicator.style.display = 'none';
+        console.log('User logged out');
+    }
+    
+    function initSocket() {
+        if (socket) socket.disconnect();
+        socket = io();
+        
+        socket.on('connect', () => console.log('🔌 Socket connected'));
+        
+        socket.on('login-success', (user) => {
+            console.log('✅ Login successful:', user.username);
+            currentUser = user;
+            const saved = loadUserFromStorage();
+            saveUserToStorage(user, saved?.password || '');
+            loginModal.classList.remove('show');
+            registerModal.classList.remove('show');
+            forgotModal.classList.remove('show');
+            resetModal.classList.remove('show');
+            socket.emit('get-messages');
+            chatInput.placeholder = 'Type a message...';
+        });
+        
+        socket.on('login-error', (msg) => {
+            console.log('❌ Login error:', msg);
+            document.getElementById('loginError').innerText = msg;
+            setTimeout(() => document.getElementById('loginError').innerText = '', 3000);
+            if (!autoLoginAttempted) {
+                clearUserFromStorage();
+                currentUser = null;
+            }
+        });
+        
+        socket.on('register-success', (msg) => {
+            document.getElementById('registerSuccess').innerText = msg;
+            setTimeout(() => {
+                registerModal.classList.remove('show');
+                loginModal.classList.add('show');
+                document.getElementById('registerSuccess').innerText = '';
+            }, 2000);
+        });
+        
+        socket.on('register-error', (msg) => {
+            document.getElementById('registerError').innerText = msg;
+            setTimeout(() => document.getElementById('registerError').innerText = '', 3000);
+        });
+        
+        socket.on('reset-allowed', (data) => {
+            pendingResetUser = data;
+            document.getElementById('resetUserDisplay').innerHTML = `Resetting password for: <strong>${data.displayName}</strong>`;
+            forgotModal.classList.remove('show');
+            resetModal.classList.add('show');
+        });
+        
+        socket.on('reset-error', (msg) => {
+            document.getElementById('forgotError').innerText = msg;
+            setTimeout(() => document.getElementById('forgotError').innerText = '', 3000);
+        });
+        
+        socket.on('password-reset-success', (msg) => {
+            document.getElementById('resetSuccess').innerText = msg;
+            setTimeout(() => {
+                resetModal.classList.remove('show');
+                loginModal.classList.add('show');
+                document.getElementById('resetSuccess').innerText = '';
+                pendingResetUser = null;
+            }, 2000);
+        });
+        
+        socket.on('messages-history', (msgs) => {
+            messages = msgs;
+            renderMessages();
+        });
+        
+        socket.on('new-message', (msg) => {
+            messages.push(msg);
+            renderMessages();
+        });
+        
+        socket.on('message-edited', ({ messageId, newText }) => {
+            const msg = messages.find(m => m.id === messageId);
+            if (msg) { msg.text = newText; msg.edited = true; renderMessages(); }
+        });
+        
+        socket.on('message-deleted', ({ messageId }) => {
+            messages = messages.filter(m => m.id !== messageId);
+            renderMessages();
+        });
+        
+        socket.on('user-typing', (data) => {
+            if (data.isTyping) typingIndicator.innerHTML = `${data.userName} is typing...`;
+            else typingIndicator.innerHTML = '';
+            setTimeout(() => { if (typingIndicator.innerHTML) typingIndicator.innerHTML = ''; }, 1500);
+        });
+    }
+    
+    function renderMessages() {
+        if (!messagesDiv) return;
+        if (messages.length === 0) {
+            messagesDiv.innerHTML = '<div style="text-align:center;padding:30px;color:#888;">No messages yet. Start the conversation!</div>';
+            return;
+        }
+        messagesDiv.innerHTML = messages.map(m => `
+            <div class="message ${m.userId === currentUser?.id ? 'own' : ''}">
+                <div class="message-actions">
+                    <button class="msg-action-btn" onclick="replyToMessage(${m.id}, '${escapeHtml(m.text).replace(/'/g, "\\'")}', '${escapeHtml(m.userName).replace(/'/g, "\\'")}')" title="Reply"><i class="fas fa-reply"></i></button>
+                    ${m.userId === currentUser?.id ? `<button class="msg-action-btn" onclick="openEditModal(${m.id}, '${escapeHtml(m.text).replace(/'/g, "\\'")}')" title="Edit"><i class="fas fa-edit"></i></button>` : ''}
+                    ${(m.userId === currentUser?.id || currentUser?.isAdmin) ? `<button class="msg-action-btn" onclick="deleteMessage(${m.id})" title="Delete"><i class="fas fa-trash"></i></button>` : ''}
+                </div>
+                <div class="message-name">
+                    <span>${escapeHtml(m.userName)} ${m.userId === currentUser?.id ? '(You)' : ''}</span>
+                    <span class="message-time">${new Date(m.timestamp).toLocaleTimeString()}</span>
+                </div>
+                ${m.replyTo ? `<div class="reply-preview"><span class="reply-to-name">↳ Replying to ${escapeHtml(m.replyTo.userName)}:</span> ${escapeHtml(m.replyTo.text.substring(0, 50))}</div>` : ''}
+                <div class="message-text">${escapeHtml(m.text)}</div>
+                ${m.edited ? '<div class="edited-badge">(edited)</div>' : ''}
+            </div>
+        `).join('');
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    window.replyToMessage = function(messageId, text, userName) {
+        replyingTo = { id: messageId, text: text, userName: userName };
+        replyingToName.innerText = userName;
+        replyIndicator.style.display = 'flex';
+        chatInput.focus();
+        chatInput.placeholder = `Replying to ${userName}...`;
+    };
+    
+    function cancelReply() {
+        replyingTo = null;
+        replyIndicator.style.display = 'none';
+        chatInput.placeholder = 'Type a message...';
+    }
+    
+    window.openEditModal = function(messageId, currentText) {
+        editingMessageId = messageId;
+        document.getElementById('editInput').value = currentText;
+        editModal.classList.add('show');
+    };
+    
+    function saveEdit() {
+        const newText = document.getElementById('editInput').value.trim();
+        if (newText && editingMessageId) {
+            socket.emit('edit-message', { messageId: editingMessageId, userId: currentUser.id, newText: newText });
+        }
+        editModal.classList.remove('show');
+        editingMessageId = null;
+        document.getElementById('editInput').value = '';
+    }
+    
+    window.deleteMessage = function(messageId) {
+        if (confirm('Delete this message?')) {
+            socket.emit('delete-message', { messageId: messageId, userId: currentUser.id });
+        }
+    };
+    
+    function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text || !socket || !currentUser) return;
+        const messageData = {
+            text: text,
+            userName: currentUser.displayName || currentUser.username,
+            userId: currentUser.id,
+            groupId: 'general'
+        };
+        if (replyingTo) {
+            messageData.replyTo = { id: replyingTo.id, text: replyingTo.text, userName: replyingTo.userName };
+        }
+        socket.emit('send-message', messageData);
+        chatInput.value = '';
+        replyingTo = null;
+        replyIndicator.style.display = 'none';
+        chatInput.placeholder = 'Type a message...';
+    }
+    
+    function startTyping() {
+        if (socket && currentUser) {
+            socket.emit('typing', { userName: currentUser.displayName || currentUser.username, isTyping: true });
+            setTimeout(() => socket.emit('typing', { userName: currentUser.displayName || currentUser.username, isTyping: false }), 1000);
+        }
+    }
+    
+    function showLoginModal() {
+        loginModal.classList.add('show');
+    }
+    
+    function attemptAutoLogin() {
+        const saved = loadUserFromStorage();
+        if (saved && saved.username && saved.password && !currentUser && !autoLoginAttempted) {
+            autoLoginAttempted = true;
+            console.log('🔄 Auto-login attempt for:', saved.username);
+            initSocket();
+            setTimeout(() => {
+                if (socket) {
+                    socket.emit('user-login', { username: saved.username, password: saved.password });
+                }
+            }, 1000);
+            return true;
+        }
+        return false;
+    }
+    
+    // ==================== EVENT LISTENERS ====================
+    searchInput.addEventListener('input', e => { searchQuery = e.target.value; applyFiltersAndRender(); });
+    
+    document.querySelectorAll('.filter-chip').forEach(c => {
+        c.addEventListener('click', () => {
+            document.querySelectorAll('.filter-chip').forEach(f => f.classList.remove('active'));
+            c.classList.add('active');
+            currentFilter = c.dataset.filter;
+            applyFiltersAndRender();
+        });
+    });
+    
+    document.querySelectorAll('.stat-card').forEach(c => {
+        c.addEventListener('click', () => {
+            const filter = c.dataset.filter;
+            const target = Array.from(document.querySelectorAll('.filter-chip')).find(ch => ch.dataset.filter === filter);
+            if (target) target.click();
+        });
+    });
+    
+    document.querySelectorAll('.view-btn').forEach(b => {
+        b.addEventListener('click', () => {
+            document.querySelectorAll('.view-btn').forEach(v => v.classList.remove('active'));
+            b.classList.add('active');
+            currentView = b.dataset.view;
+            applyFiltersAndRender();
+        });
+    });
+    
+    refreshBtn.addEventListener('click', () => {
+        const i = refreshBtn.querySelector('i');
+        i.classList.add('refresh-spin');
+        fetchFlights().finally(() => setTimeout(() => i.classList.remove('refresh-spin'), 500));
+    });
+    
+    notifBell.addEventListener('click', () => notificationPanel.classList.toggle('show'));
+    document.getElementById('markAllRead')?.addEventListener('click', markAllRead);
+    document.addEventListener('click', e => {
+        if (!notifBell.contains(e.target) && !notificationPanel.contains(e.target)) {
+            notificationPanel.classList.remove('show');
+        }
+    });
+    
+    // Settings
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const overlay = document.getElementById('overlay');
+    const closeSettings = document.getElementById('closeSettings');
+    const notifToggle = document.getElementById('notifToggle');
+    const clearHistory = document.getElementById('clearHistory');
+    
+    settingsBtn.addEventListener('click', () => {
+        settingsPanel.classList.add('show');
+        overlay.classList.add('show');
+    });
+    
+    const closePanel = () => {
+        settingsPanel.classList.remove('show');
+        overlay.classList.remove('show');
+    };
+    closeSettings.addEventListener('click', closePanel);
+    overlay.addEventListener('click', closePanel);
+    
+    notifToggle.addEventListener('click', async () => {
+        desktopNotificationsEnabled = !desktopNotificationsEnabled;
+        if (desktopNotificationsEnabled && Notification.permission !== 'granted') {
+            const granted = await requestNotificationPermission();
+            if (!granted) {
+                desktopNotificationsEnabled = false;
+                alert('Please allow notifications in browser settings');
+            }
+        }
+        if (desktopNotificationsEnabled) notifToggle.classList.add('active');
+        else notifToggle.classList.remove('active');
+        localStorage.setItem('flightSettings', JSON.stringify({ desktopNotificationsEnabled }));
+        if (desktopNotificationsEnabled) {
+            addNotification('Notifications Enabled', 'You will receive flight alerts', 'info');
+            sendDesktopNotification('Buddha Air', 'Notifications are now active!');
+        }
+    });
+    
+    clearHistory.addEventListener('click', () => {
+        if (confirm('Clear all history?')) {
+            flightHistory = [];
+            notificationsList = [];
+            lastNotificationId = 0;
+            localStorage.removeItem('flightHistoryData');
+            localStorage.removeItem('notificationsList');
+            renderHistory();
+            renderNotifications();
+            addNotification('History Cleared', 'All logs deleted', 'info');
+        }
+    });
+    
+    historyDateInput.addEventListener('change', renderHistory);
+    if (!historyDateInput.value) historyDateInput.value = new Date().toISOString().split('T')[0];
+    
+    // Chat Event Listeners
+    chatBtn.addEventListener('click', () => {
+        if (!currentUser) {
+            const saved = loadUserFromStorage();
+            if (saved && saved.username && saved.password) {
+                console.log('🔄 Auto-login on chat click for:', saved.username);
+                chatInput.placeholder = 'Logging in...';
+                autoLoginAttempted = true;
+                initSocket();
+                setTimeout(() => {
+                    if (socket) {
+                        socket.emit('user-login', { username: saved.username, password: saved.password });
+                    }
+                }, 1000);
+            } else {
+                showLoginModal();
+            }
+        } else {
+            if (chatModal.classList.contains('open')) {
+                chatModal.classList.remove('open');
+            } else {
+                chatModal.classList.add('open');
+                if (socket) socket.emit('get-messages');
+            }
+        }
+    });
+    
+    document.getElementById('closeChat').onclick = () => chatModal.classList.remove('open');
+    document.getElementById('sendBtn').onclick = sendMessage;
+    chatInput.onkeypress = (e) => { if (e.key === 'Enter') sendMessage(); else startTyping(); };
+    document.getElementById('logoutFromChatBtn').onclick = logout;
+    document.getElementById('cancelReplyBtn').onclick = cancelReply;
+    document.getElementById('saveEditBtn').onclick = saveEdit;
+    document.getElementById('cancelEditBtn').onclick = () => { editModal.classList.remove('show'); editingMessageId = null; };
+    
+    // Modal close buttons
+    document.getElementById('closeLoginModal').onclick = () => loginModal.classList.remove('show');
+    document.getElementById('closeRegisterModal').onclick = () => registerModal.classList.remove('show');
+    document.getElementById('closeForgotModal').onclick = () => forgotModal.classList.remove('show');
+    document.getElementById('closeResetModal').onclick = () => resetModal.classList.remove('show');
+    
+    // Auth handlers
+    document.getElementById('doLogin').onclick = () => {
+        const username = document.getElementById('loginUsername').value;
+        const password = document.getElementById('loginPassword').value;
+        if (username && password) {
+            initSocket();
+            setTimeout(() => socket.emit('user-login', { username, password }), 500);
+        } else {
+            document.getElementById('loginError').innerText = 'Please enter username and password';
+        }
+    };
+    
+    document.getElementById('doRegister').onclick = () => {
+        const username = document.getElementById('regUsername').value;
+        const displayName = document.getElementById('regDisplayName').value || username;
+        const password = document.getElementById('regPassword').value;
+        if (username && password) {
+            initSocket();
+            setTimeout(() => socket.emit('user-register', { username, password, displayName }), 500);
+        } else {
+            document.getElementById('registerError').innerText = 'Please fill all fields';
+        }
+    };
+    
+    document.getElementById('doForgot').onclick = () => {
+        const username = document.getElementById('forgotUsername').value;
+        if (username) {
+            initSocket();
+            setTimeout(() => socket.emit('forgot-password', { username }), 500);
+        } else {
+            document.getElementById('forgotError').innerText = 'Please enter your username';
+        }
+    };
+    
+    document.getElementById('doReset').onclick = () => {
+        const newPass = document.getElementById('newPassword').value;
+        const confirm = document.getElementById('confirmPassword').value;
+        if (newPass && newPass === confirm) {
+            socket.emit('reset-password-direct', { userId: pendingResetUser.userId, newPassword: newPass });
+        } else {
+            document.getElementById('resetError').innerText = 'Passwords do not match';
+        }
+    };
+    
+    document.getElementById('showRegister').onclick = () => { loginModal.classList.remove('show'); registerModal.classList.add('show'); };
+    document.getElementById('showLogin').onclick = () => { registerModal.classList.remove('show'); loginModal.classList.add('show'); };
+    document.getElementById('showForgot').onclick = () => { loginModal.classList.remove('show'); forgotModal.classList.add('show'); };
+    document.getElementById('showLoginFromForgot').onclick = () => { forgotModal.classList.remove('show'); loginModal.classList.add('show'); };
+    
+    // Load saved data
+    const savedTracked = localStorage.getItem('trackedFlights');
+    if (savedTracked) trackedFlights = new Set(JSON.parse(savedTracked));
+    
+    const savedHistory = localStorage.getItem('flightHistoryData');
+    if (savedHistory) flightHistory = JSON.parse(savedHistory);
+    renderHistory();
+    
+    const savedNotifications = localStorage.getItem('notificationsList');
+    if (savedNotifications) {
+        notificationsList = JSON.parse(savedNotifications);
+        notificationsList.forEach(n => n.read = true);
+    }
+    renderNotifications();
+    
+    const savedSettings = localStorage.getItem('flightSettings');
+    if (savedSettings) {
+        const settings = JSON.parse(savedSettings);
+        desktopNotificationsEnabled = settings.desktopNotificationsEnabled || false;
+        if (desktopNotificationsEnabled) notifToggle.classList.add('active');
+    }
+    
+    window.toggleTrackFlight = toggleTrackFlight;
+    
+    // Auto-login on page load
+    attemptAutoLogin();
+    
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW Error:', err));
+        });
+    }
+    
+    // Initialize flight tracker
+    fetchFlights();
+    setInterval(fetchFlights, 30000);
+</script>
+</body>
+</html>
