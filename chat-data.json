@@ -1,0 +1,165 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "1221",
+      "displayName": "Admin",
+      "isAdmin": true,
+      "createdAt": "2026-04-13T18:32:39.232Z"
+    },
+    {
+      "id": 2,
+      "username": "testuser",
+      "password": "2233",
+      "displayName": "Test User",
+      "isAdmin": false,
+      "createdAt": "2026-04-13T18:32:39.233Z"
+    },
+    {
+      "id": 3,
+      "username": "technician",
+      "password": "tech123",
+      "displayName": "Technician",
+      "isAdmin": false,
+      "createdAt": "2026-04-13T18:32:39.233Z"
+    },
+    {
+      "id": 1776107600183,
+      "username": "sasa",
+      "password": "sasa",
+      "displayName": "sasa",
+      "isAdmin": false,
+      "createdAt": "2026-04-13T19:13:20.183Z"
+    },
+    {
+      "id": 1776120494483,
+      "username": "sasaz",
+      "password": "sasaz",
+      "displayName": "sasaz",
+      "isAdmin": false,
+      "createdAt": "2026-04-13T22:48:14.483Z"
+    },
+    {
+      "id": 1776125414302,
+      "username": "ruj",
+      "password": "ruj",
+      "displayName": "suj",
+      "isAdmin": false,
+      "createdAt": "2026-04-14T00:10:14.302Z"
+    },
+    {
+      "id": 1776126617796,
+      "username": "new",
+      "password": "new",
+      "displayName": "new",
+      "isAdmin": false,
+      "createdAt": "2026-04-14T00:30:17.796Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": 1776105979178,
+      "text": "cvcvc",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-13T18:46:19.178Z",
+      "groupId": "general",
+      "replyTo": {
+        "id": 1776105190130,
+        "text": "hi",
+        "userName": "Admin"
+      }
+    },
+    {
+      "id": 1776106457609,
+      "text": "helllo",
+      "userName": "Test User",
+      "userId": 2,
+      "timestamp": "2026-04-13T18:54:17.609Z",
+      "groupId": "general",
+      "replyTo": {
+        "id": 1776105979178,
+        "text": "cvcvc",
+        "userName": "Admin"
+      }
+    },
+    {
+      "id": 1776121515851,
+      "text": "?",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-13T23:05:15.851Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776125260549,
+      "text": "52?",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T00:07:40.549Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776125458206,
+      "text": "ho",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T00:10:58.206Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776126647847,
+      "text": "ty",
+      "userName": "new",
+      "userId": 1776126617796,
+      "timestamp": "2026-04-14T00:30:47.847Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776127985693,
+      "text": "yess",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T00:53:05.693Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776128001989,
+      "text": "great",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T00:53:21.989Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776131143019,
+      "text": "hghg",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T01:45:43.019Z",
+      "groupId": "general",
+      "replyTo": {
+        "id": 1776125260549,
+        "text": "52?",
+        "userName": "Admin"
+      }
+    },
+    {
+      "id": 1776134191315,
+      "text": "?",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T02:36:31.315Z",
+      "groupId": "general"
+    },
+    {
+      "id": 1776135566450,
+      "text": "hlw",
+      "userName": "Admin",
+      "userId": 1,
+      "timestamp": "2026-04-14T02:59:26.450Z",
+      "groupId": "general"
+    }
+  ]
+}
