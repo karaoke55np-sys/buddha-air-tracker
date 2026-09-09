@@ -2179,13 +2179,40 @@
             }, 1000);
         }
 
+        // CARTO's dark basemap tiles now require a free API key (a policy
+        // change made after this map was originally built) -- without
+        // one, every tile shows an "API KEY REQUIRED" watermark. Get a
+        // free key (5M tiles/month, no approval queue) at
+        // https://carto.com/basemaps/apikey and paste it below to restore
+        // the dark map style. Left blank, this automatically falls back
+        // to plain OpenStreetMap tiles instead, so the map still works
+        // out of the box either way -- just without the dark theme.
+        const CARTO_API_KEY = '';
+
+        function tileLayerConfig() {
+            if (CARTO_API_KEY) {
+                return {
+                    url: `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${CARTO_API_KEY}`,
+                    options: {
+                        subdomains: 'abcd', maxZoom: 20,
+                        attribution: '&copy; OpenStreetMap, &copy; CARTO',
+                    },
+                };
+            }
+            return {
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                options: {
+                    subdomains: 'abc', maxZoom: 19,
+                    attribution: '&copy; OpenStreetMap contributors',
+                },
+            };
+        }
+
         function ensureMap() {
             if (leafletMap) return;
             leafletMap = L.map('acModalMap', { zoomControl: true, attributionControl: false });
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                subdomains: 'abcd',
-                maxZoom: 12,
-            }).addTo(leafletMap);
+            const tiles = tileLayerConfig();
+            L.tileLayer(tiles.url, tiles.options).addTo(leafletMap);
             mapLayerGroup = L.layerGroup().addTo(leafletMap);
         }
 

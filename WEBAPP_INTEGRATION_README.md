@@ -423,6 +423,34 @@ corrupted live ADS-B reading for an airborne aircraft correctly gets
 discarded and the system falls through to a valid board-sourced sector
 instead of ever showing the bad data.
 
+## Fix: map showing "API KEY REQUIRED" watermark
+Real external cause, not a bug in the code: CARTO (the dark map tile
+provider originally used) changed policy in late August 2026 — their
+free raster tile endpoint now requires an API key, and unkeyed requests
+get a repeated "API KEY REQUIRED" watermark stamped across every tile.
+Confirmed via search — this broke the same way for many other unrelated
+projects using the same CARTO endpoint around the same date, it wasn't
+specific to this app.
+
+**Fixed with an automatic fallback:** the map now uses plain
+OpenStreetMap tiles by default, which are free with no key needed at
+all — so the map works immediately again, just without the dark theme
+(OSM's standard style is light).
+
+**To get the dark map style back:** grab a free CARTO API key (5
+million tiles/month, no approval queue, instant) at
+`https://carto.com/basemaps/apikey`, then paste it into
+`CARTO_API_KEY` near the top of the map code in `index.html`:
+```js
+const CARTO_API_KEY = 'your-key-here';
+```
+Leave it blank to keep using the keyless OpenStreetMap fallback.
+
+Verified both code paths produce the correct tile URL before shipping
+this — the blank-key case correctly falls back to OpenStreetMap, and a
+filled-in key correctly builds the CARTO dark-tile URL with `?key=...`
+appended.
+
 ## Deploying to Render
 Three new files handle this: `Dockerfile`, `requirements.txt`, and
 `render.yaml`. The app was already ported to run as one process that
