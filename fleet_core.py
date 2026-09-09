@@ -301,17 +301,15 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result):
     Trust filtering, to avoid showing a wrong/stale sector:
       - A bare "Scheduled" status carries a default/typical aircraft for
         that route, not a confirmed real tail -- always skipped.
-      - A departures-side entry (plane hasn't left yet) that's still far
-        in the future is *also* often provisional -- airlines can swap
-        the assigned tail right up until close to departure, and FR24
-        sometimes shows a tentative assignment well before that's firm.
-        These are skipped too, UNLESS the flight has already actually
-        departed (status says so) or its departure time is imminent
-        (within NEAR_TERM_DEPARTURE_WINDOW_SEC), since assignments are
-        much more reliable close to the actual event.
-      - Arrivals-side entries aren't subject to this: an in-progress or
-        completed arrival reflects a flight that's already happening,
-        so its tail is a fact, not a guess.
+      - Any entry (arrival OR departure) describing something that
+        hasn't happened yet and is still far in the future is *also*
+        often provisional -- airlines can swap the assigned tail right
+        up until close to the event, and FR24 sometimes shows a
+        tentative assignment (status "Estimated"/"Delayed") well before
+        that's firm, on either side of the board. These are skipped too,
+        UNLESS the event has already happened (landed / departed) or is
+        imminent (within NEAR_TERM_DEPARTURE_WINDOW_SEC), since
+        assignments are much more reliable close to the actual event.
     """
     try:
         raw = fr.get_airport_details(airport_code, flight_limit=100)
@@ -356,11 +354,21 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result):
             )
 
             if section_name == "departures":
-                already_departed = any(
+                already_happened = any(
                     word in status.lower() for word in ("departed", "airborne", "en route", "en-route")
                 )
-                if not already_departed and ts > now_ts + NEAR_TERM_DEPARTURE_WINDOW_SEC:
-                    continue  # too far out to trust the assigned tail yet
+            else:  # arrivals
+                already_happened = "land" in status.lower()
+
+            # A pending (not-yet-happened) event far in the future carries
+            # the same provisional-tail risk on either side of the board --
+            # an "Estimated" arrival that hasn't landed yet can be just as
+            # much of a placeholder/typical-aircraft guess as a pending
+            # departure. Only trust it once it's already happened, or the
+            # event is imminent/overdue (ts at or before now, or within the
+            # near-term window ahead).
+            if not already_happened and ts > now_ts + NEAR_TERM_DEPARTURE_WINDOW_SEC:
+                continue  # too far out to trust the assigned tail yet
 
             if reg not in best_ts or ts >= best_ts[reg]:
                 best_ts[reg] = ts
@@ -464,6 +472,23 @@ def resolve_missing_sectors_via_details(fr, by_reg, hub_schedule):
 # ----------------------------------------------------------------------
 # Classification -> structured records (JSON-friendly)
 # ----------------------------------------------------------------------
+
+# How long a cached "last known sector" stays trustworthy before we treat
+# it as too stale to show. Without this, an aircraft that's rarely
+# re-observed flying (or grounded somewhere our airport boards don't
+# cover) could keep showing a sector from many hours or days ago,
+# indefinitely, with no way to tell it's outdated.
+CACHE_MAX_AGE_HOURS = 12
+
+
+def _cache_entry_is_fresh(entry):
+    try:
+        updated = datetime.datetime.strptime(entry["updated"], "%Y-%m-%d %H:%M:%S")
+        age_hours = (datetime.datetime.now() - updated).total_seconds() / 3600
+        return age_hours <= CACHE_MAX_AGE_HOURS
+    except Exception:
+        return False  # malformed/missing timestamp -- don't trust it
+
 
 def _current_airport_for_ground(sector, source, note):
     """
@@ -577,7 +602,7 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
             sector = hub_schedule[reg]["sector"]
             source = "board"
             note = hub_schedule[reg]["status"]
-        elif reg in cache:
+        elif reg in cache and _cache_entry_is_fresh(cache[reg]):
             sector = cache[reg]["sector"]
             source = "cache"
             note = f"Last seen on this sector at {cache[reg]['updated']}"
@@ -647,17 +672,44 @@ def group_by_sector(records):
 # One full poll cycle -- the single function both front ends call
 # ----------------------------------------------------------------------
 
+def fetch_positions(fr):
+    """The fast, cheap part of a poll cycle: live positions only (air/
+    ground state, altitude, speed, heading). No schedule-board or
+    per-flight-detail lookups here -- those are the slower, heavier part
+    (see fetch_enrichment) that doesn't need refreshing nearly as often,
+    since sector/ETA/delay data doesn't change second-to-second the way
+    position does. Splitting these lets the visible map/altitude/speed
+    stay close to real-time without hammering FlightRadar24's free feed
+    at a rate that risks getting rate-limited or blocked entirely.
+    """
+    return fetch_tracked_flights(fr)
+
+
+def fetch_enrichment(fr, by_reg):
+    """The slower, heavier part of a poll cycle: airport schedule boards
+    (sector/ETA/delay data) and per-flight detail resolution for any
+    airborne aircraft still missing a sector. Mutates by_reg in place
+    (the resolve step) and returns hub_schedule.
+    """
+    hub_schedule = fetch_hub_schedule(fr)
+    resolve_missing_sectors_via_details(fr, by_reg, hub_schedule)
+    return hub_schedule
+
+
 def poll_once(fr, cache):
     """
     Does one complete cycle: fetch live positions, check schedule boards,
     resolve remaining unknowns, update the cache, and classify.
     Returns (records, updated_cache, timestamp).
+
+    Used by tracker.py (the desktop tool), which only needs one cadence.
+    api_server.py instead calls fetch_positions/fetch_enrichment directly
+    at two different speeds -- see the "TWO-SPEED POLLING" section there.
     """
-    by_reg = fetch_tracked_flights(fr)
+    by_reg = fetch_positions(fr)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    hub_schedule = fetch_hub_schedule(fr)
-    resolve_missing_sectors_via_details(fr, by_reg, hub_schedule)
+    hub_schedule = fetch_enrichment(fr, by_reg)
 
     cache = update_sector_cache(cache, by_reg, timestamp)
     save_sector_cache(cache)

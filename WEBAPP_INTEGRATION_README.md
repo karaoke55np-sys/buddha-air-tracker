@@ -326,6 +326,68 @@ sweep still had a stale "descending KEP→KTM" reading for the same tail
 aircraft's speed and taxi-flag survive the identical kind of conflict,
 which is what was silently breaking taxi detection too.
 
+## New: near-real-time positions + smooth map motion
+Two changes address the "delayed / not live enough" feedback, plus a
+sector fix for ANW/ANZ found along the way.
+
+### Two-speed polling (api_server.py rewritten)
+Position data (altitude, speed, heading, air/ground state) now refreshes
+every **10 seconds** instead of every 2 minutes. Airport schedule-board
+data (sector/ETA/delay) still refreshes every 90 seconds, since that
+genuinely doesn't change second-to-second the way position does.
+Splitting these means the visible map/altitude/speed can update ~12x
+faster without multiplying the total request rate against FlightRadar24
+by the same factor.
+
+**Why not faster than 10s:** FlightRadar24's free/unofficial feed isn't
+built for the sub-5-second polling the paid FlightRadar24 website uses.
+Pushing this further risks the connection getting rate-limited or
+blocked entirely, which would break the whole tracker, not just slow it
+down. 10s is a deliberate, tested balance, not an arbitrary number —
+verified with a real threaded test that both loops actually run at
+their intended independent cadences without racing each other.
+
+The frontend's own poll interval (`LIVE_REFRESH_MS` in `index.html`)
+dropped from 30s to 6s to match.
+
+### Smooth motion on the map (the FlightRadar24 trick)
+Between real position updates, the map now **extrapolates** each
+aircraft's motion using its last known speed and heading (standard
+dead-reckoning navigation math), rather than the marker sitting still
+and jumping every 10 seconds. It automatically snaps back to the real
+GPS-derived position the moment fresh data arrives, so drift never
+accumulates past one poll cycle. This is the same technique consumer
+flight trackers use — true continuous data isn't actually available
+even from FlightRadar24 itself at every instant, smoothing is what
+makes it *look* perfectly live.
+
+Tested directly: verified the movement math produces geometrically
+correct results in all four cardinal directions before trusting it, then
+tested the full lifecycle with a real 6.5-second wait — confirmed the
+marker visibly moves during the animation-only window, and correctly
+snaps to a fresh real position the moment the app's own update cycle
+delivers one.
+
+### Sector fix: ANW / ANZ showing wrong data
+Two related bugs found and fixed:
+
+1. **Arrivals-side schedule entries had the same provisional-tail risk
+   we'd only protected departures against.** An "Estimated" arrival far
+   in the future can be just as much of a placeholder/typical-aircraft
+   guess as a pending departure — now both sides of the board apply the
+   same trust window (only believe a pending entry if it's imminent or
+   already happened).
+2. **The sector-memory cache never expired.** If an aircraft wasn't
+   freshly observed flying for a long stretch, a very old cached sector
+   could keep showing indefinitely with no way to tell it was stale.
+   Cache entries older than 12 hours are now treated as unknown instead
+   of shown as if current.
+
+Verified both with direct tests: a far-future "Estimated" arrival is now
+correctly excluded while a near-term one and an already-landed one are
+correctly kept; a 20-hour-old cache entry is now correctly rejected
+while a fresh one is still trusted.
+
 ## Deploying to Render
 Three new files handle this: `Dockerfile`, `requirements.txt`, and
 `render.yaml`. The app was already ported to run as one process that

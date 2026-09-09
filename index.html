@@ -1849,11 +1849,12 @@
     // ==================== LIVE TRACKER (FlightRadar24 -- separate tab) ====================
     (function () {
         const LIVE_API_URL = '/api/fleet-status'; // proxied by server.js to the Python api_server.py
-        const LIVE_REFRESH_MS = 30000;
+        const LIVE_REFRESH_MS = 6000; // matches api_server.py's fast (position) poll cadence
         const APPROACH_ALT_FT = 8000; // keep in sync with fleet_core.DESCENT_ALT_THRESHOLD
 
         let liveData = null;
         let currentLiveTab = 'approach';
+        let currentModalReg = null; // registration shown in the map modal, if open
         let approachFilter = 'All'; // airport code, or 'All'
         let groundFilter = 'All';
         let taxiFilter = 'All';
@@ -2035,6 +2036,19 @@
                 taxiing.length === 0 ? 'No aircraft currently taxiing.' : 'No taxiing aircraft at this airport.');
 
             applyLiveTabVisibility();
+
+            // If the map modal is open for one of these aircraft, re-base
+            // it to the fresh real position (re-render without re-fitting
+            // the view -- see renderMapFor's isInitialRender param) so the
+            // dead-reckoning animation never drifts more than one poll
+            // interval away from reality, and the info panel stays current.
+            if (currentModalReg) {
+                const updated = findRecordByReg(currentModalReg);
+                if (updated) {
+                    renderModalInfo(updated);
+                    renderMapFor(updated, false);
+                }
+            }
         }
 
         async function fetchLiveTracker() {
@@ -2112,6 +2126,59 @@
             return { CRUISE: '#3b82f6', CLIMBING: '#10b981', DESCENDING: '#f59e0b' }[r.phase] || '#3b82f6';
         }
 
+        // ---- Smooth motion between real data updates (dead reckoning) ----
+        // FlightRadar24's own free feed only gives us a new real position
+        // every FAST_POLL_SECONDS (see api_server.py), which would look
+        // jumpy on a live map. Between updates, extrapolate the marker's
+        // position forward using its last known speed + heading -- the
+        // same technique consumer flight trackers use -- then snap back
+        // to the real position whenever fresh data actually arrives
+        // (wired in from renderLiveTracker below), so drift never
+        // accumulates for more than one poll interval.
+        let animationTimer = null;
+        let animationBase = null; // { lat, lon, speedKt, headingDeg, baseTimeMs }
+        let currentAircraftMarker = null;
+
+        function advancePosition(baseLat, baseLon, speedKt, headingDeg, elapsedSeconds) {
+            const distanceNm = (speedKt / 3600) * elapsedSeconds;
+            const headingRad = (headingDeg * Math.PI) / 180;
+            const northComponent = Math.cos(headingRad);
+            const eastComponent = Math.sin(headingRad);
+            const deltaLatDeg = (distanceNm / 60) * northComponent;
+            const latRad = (baseLat * Math.PI) / 180;
+            const deltaLonDeg = (distanceNm / 60) * eastComponent / Math.cos(latRad);
+            return [baseLat + deltaLatDeg, baseLon + deltaLonDeg];
+        }
+
+        function stopPositionAnimation() {
+            if (animationTimer) {
+                clearInterval(animationTimer);
+                animationTimer = null;
+            }
+            animationBase = null;
+            currentAircraftMarker = null;
+        }
+
+        function startPositionAnimation(marker, r) {
+            stopPositionAnimation();
+            if (!r.position || !r.position_is_live || !r.ground_speed_kt || r.heading == null) return;
+            currentAircraftMarker = marker;
+            animationBase = {
+                lat: r.position[0], lon: r.position[1],
+                speedKt: r.ground_speed_kt, headingDeg: r.heading,
+                baseTimeMs: Date.now(),
+            };
+            animationTimer = setInterval(() => {
+                if (!animationBase || !currentAircraftMarker) return;
+                const elapsedSeconds = (Date.now() - animationBase.baseTimeMs) / 1000;
+                const next = advancePosition(
+                    animationBase.lat, animationBase.lon,
+                    animationBase.speedKt, animationBase.headingDeg, elapsedSeconds
+                );
+                currentAircraftMarker.setLatLng(next);
+            }, 1000);
+        }
+
         function ensureMap() {
             if (leafletMap) return;
             leafletMap = L.map('acModalMap', { zoomControl: true, attributionControl: false });
@@ -2122,7 +2189,7 @@
             mapLayerGroup = L.layerGroup().addTo(leafletMap);
         }
 
-        function renderMapFor(r) {
+        function renderMapFor(r, isInitialRender) {
             ensureMap();
             mapLayerGroup.clearLayers();
 
@@ -2152,20 +2219,27 @@
                     : `<b>${r.registration}</b><br>Approximate (at ${r.current_airport_label || 'airport'})`;
                 marker.bindPopup(popupText);
                 bounds.push(r.position);
+                startPositionAnimation(marker, r);
+            } else {
+                stopPositionAnimation();
             }
 
-            // Give the map a moment to know its real size (it was just
-            // unhidden), then fit to whatever we actually have.
-            setTimeout(() => {
-                leafletMap.invalidateSize();
-                if (bounds.length > 1) {
-                    leafletMap.fitBounds(bounds, { padding: [40, 40] });
-                } else if (bounds.length === 1) {
-                    leafletMap.setView(bounds[0], 9);
-                } else {
-                    leafletMap.setView([28.0, 84.5], 6); // fallback: center of Nepal
-                }
-            }, 50);
+            // Only auto-fit the view the first time this aircraft's modal
+            // opens -- subsequent re-renders (re-basing to a fresh real
+            // position every poll cycle) shouldn't yank the map away from
+            // wherever the person has since panned/zoomed to.
+            if (isInitialRender) {
+                setTimeout(() => {
+                    leafletMap.invalidateSize();
+                    if (bounds.length > 1) {
+                        leafletMap.fitBounds(bounds, { padding: [40, 40] });
+                    } else if (bounds.length === 1) {
+                        leafletMap.setView(bounds[0], 9);
+                    } else {
+                        leafletMap.setView([28.0, 84.5], 6); // fallback: center of Nepal
+                    }
+                }, 50);
+            }
         }
 
         function metricBlock(icon, label, value) {
@@ -2206,13 +2280,16 @@
         function openAircraftMap(reg) {
             const r = findRecordByReg(reg);
             if (!r) return;
+            currentModalReg = reg;
             document.getElementById('aircraftMapModal').style.display = 'flex';
             renderModalInfo(r);
-            renderMapFor(r);
+            renderMapFor(r, true);
         }
 
         function closeAircraftMap() {
             document.getElementById('aircraftMapModal').style.display = 'none';
+            stopPositionAnimation();
+            currentModalReg = null;
         }
 
         document.getElementById('liveTrackerView').addEventListener('click', (e) => {
