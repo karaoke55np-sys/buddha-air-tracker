@@ -388,6 +388,41 @@ correctly excluded while a near-term one and an already-landed one are
 correctly kept; a 20-hour-old cache entry is now correctly rejected
 while a fresh one is still trusted.
 
+## New: universal sector plausibility check (not another point-fix)
+Rather than chasing one more specific bug report, this adds a blanket
+validation layer that every sector must pass **before it's ever shown**,
+regardless of which source produced it — live ADS-B, the schedule
+board, or the sector-memory cache.
+
+A sector is only accepted if both airports are actually in Buddha Air's
+known network, and the two sides differ (with one explicit exception:
+`KTM-KTM`, since an Everest Experience mountain flight legitimately
+loops back to Kathmandu). Anything failing this — a garbage/unrecognized
+airport code, a same-airport pair that isn't the Everest case, a bad
+parse — is treated exactly like "no sector data" and falls through to
+the next source in the normal priority chain (live → board → cache →
+unknown) instead of ever being displayed.
+
+This is applied at **every** point a sector can enter the system:
+- Schedule-board entries are filtered at the source, in
+  `_fetch_single_airport_schedule` — a board match pointing at an
+  unrecognized airport is rejected before it ever reaches `hub_schedule`.
+- Live ADS-B readings are checked in `build_fleet_records` for both
+  airborne and grounded aircraft — a corrupted reading correctly falls
+  through to board/cache data instead of being shown.
+- The persistent sector-memory cache itself only ever stores sectors
+  that passed this check, in `update_sector_cache` — so a bad reading
+  can never get remembered and served back later as if trustworthy.
+
+Tested directly: all 8 plausibility cases (valid domestic sectors, valid
+cross-sectors, the Everest exception, a same-airport rejection, garbage
+codes, empty/missing sectors) behave correctly; a garbage board entry is
+correctly filtered at the source while a valid one for a different
+aircraft passes through; and — the most important test — a deliberately
+corrupted live ADS-B reading for an airborne aircraft correctly gets
+discarded and the system falls through to a valid board-sourced sector
+instead of ever showing the bad data.
+
 ## Deploying to Render
 Three new files handle this: `Dockerfile`, `requirements.txt`, and
 `render.yaml`. The app was already ported to run as one process that

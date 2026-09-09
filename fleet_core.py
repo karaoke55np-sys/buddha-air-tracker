@@ -162,10 +162,12 @@ def save_sector_cache(cache):
 
 def update_sector_cache(cache, by_reg, timestamp):
     """Remember the latest known sector for every aircraft we can see
-    right now (air or ground with an active flight plan)."""
+    right now (air or ground with an active flight plan). Only ever
+    caches a sector that passes the plausibility check, so a bad reading
+    can't get remembered and then served back later as if trustworthy."""
     for reg, f in by_reg.items():
         sector = sector_of(f)
-        if sector:
+        if sector and _is_plausible_sector(sector):
             cache[reg] = {
                 "sector": sector,
                 "on_ground_when_seen": f.on_ground,
@@ -194,6 +196,30 @@ def sector_of(f):
     if o and d:
         return f"{o}-{d}"
     return None
+
+
+def _is_plausible_sector(sector):
+    """
+    Rejects a sector before it's ever shown, regardless of which source
+    produced it (live ADS-B, schedule board, or our own cache). This is
+    a blanket safety net independent of any one specific bug -- every
+    sector must involve two airports actually in Buddha Air's known
+    network, and the two sides must differ (except the KTM-KTM loop of
+    an Everest Experience mountain flight, which is legitimate).
+
+    Anything failing this check is treated exactly like "no sector data"
+    from that source, so the normal priority chain (live -> board ->
+    cache -> unknown) just falls through to the next source instead of
+    ever displaying something implausible.
+    """
+    if not sector or "-" not in sector:
+        return False
+    o, d = sector.split("-", 1)
+    if o not in AIRPORT_ALL_COORDS or d not in AIRPORT_ALL_COORDS:
+        return False
+    if o == d and sector != "KTM-KTM":
+        return False
+    return True
 
 
 # ----------------------------------------------------------------------
@@ -345,6 +371,13 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result):
 
             orig = other_code if hub_side == "destination" else airport_code
             dest = airport_code if hub_side == "destination" else other_code
+
+            # Reject any board entry pointing at an airport outside
+            # Buddha Air's known network -- catches bad parses or a
+            # coincidental registration collision with unrelated traffic
+            # before it ever gets treated as a real sector.
+            if not _is_plausible_sector(f"{orig}-{dest}"):
+                continue
 
             ts = (
                 _dig(flight, "time", "real", time_key)
@@ -553,10 +586,14 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
 
         if f is not None and not f.on_ground:
             sector = sector_of(f)
+            if not _is_plausible_sector(sector):
+                sector = None
             source = "live"
             if not sector and reg in hub_schedule:
-                sector = hub_schedule[reg]["sector"]
-                source = "board"
+                candidate = hub_schedule[reg]["sector"]
+                if _is_plausible_sector(candidate):
+                    sector = candidate
+                    source = "board"
             phase = "DESCENDING" if (f.vertical_speed or 0) < -200 else \
                     "CLIMBING" if (f.vertical_speed or 0) > 200 else "CRUISE"
             dest_code = sector.split("-")[1] if sector else None
@@ -591,6 +628,8 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
 
         # Grounded, or simply not in the live feed at all.
         sector = sector_of(f) if f is not None else None
+        if not _is_plausible_sector(sector):
+            sector = None
         ground_speed = f.ground_speed if f is not None else None
         is_taxiing = bool(f is not None and ground_speed is not None and ground_speed > TAXI_SPEED_KT)
 
@@ -598,11 +637,11 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
             source = "live"
             note = f"Taxiing at {ground_speed} kt (callsign {f.callsign or '-'})" if is_taxiing \
                 else f"On ground, flight plan active (callsign {f.callsign or '-'})"
-        elif reg in hub_schedule:
+        elif reg in hub_schedule and _is_plausible_sector(hub_schedule[reg]["sector"]):
             sector = hub_schedule[reg]["sector"]
             source = "board"
             note = hub_schedule[reg]["status"]
-        elif reg in cache and _cache_entry_is_fresh(cache[reg]):
+        elif reg in cache and _cache_entry_is_fresh(cache[reg]) and _is_plausible_sector(cache[reg]["sector"]):
             sector = cache[reg]["sector"]
             source = "cache"
             note = f"Last seen on this sector at {cache[reg]['updated']}"
