@@ -403,12 +403,21 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result):
             if not already_happened and ts > now_ts + NEAR_TERM_DEPARTURE_WINDOW_SEC:
                 continue  # too far out to trust the assigned tail yet
 
+            # Also capture the flight's own identification callsign
+            # (e.g. "BHA855") straight from the board -- this is what
+            # lets us match a grounded aircraft to its flight number even
+            # when it has no live radar signal at all (callsign is only
+            # ever populated from live ADS-B otherwise; a lot of grounded
+            # aircraft never get one until they actually push back).
+            board_callsign = _dig(flight, "identification", "callsign")
+
             if reg not in best_ts or ts >= best_ts[reg]:
                 best_ts[reg] = ts
                 result[reg] = {
                     "sector": f"{orig}-{dest}",
                     "status": status or section_name,
                     "timing": _extract_timing(flight),
+                    "callsign": board_callsign,
                 }
                 found_any = True
 
@@ -523,7 +532,7 @@ def _cache_entry_is_fresh(entry):
         return False  # malformed/missing timestamp -- don't trust it
 
 
-def _current_airport_for_ground(sector, source, note):
+def _current_airport_for_ground(sector, source, note, has_landed=None):
     """
     Where a grounded aircraft actually IS right now, as opposed to the
     full sector that explains why we know that. Used for the "filter by
@@ -535,9 +544,18 @@ def _current_airport_for_ground(sector, source, note):
       - source "live" (FR24 still shows an active flight plan while
         parked): normally seen just before departure, so the aircraft
         is at the ORIGIN side of that plan.
-      - source "board": if the status says "Landed", the aircraft is at
-        the DESTINATION (arrived); otherwise (Estimated/Delayed on the
-        departures side) it's still at the ORIGIN, waiting to leave.
+      - source "board": whether the aircraft has actually landed is
+        decided from `has_landed` -- a real, structured arrival
+        timestamp (FR24 only ever sets this once the aircraft has
+        genuinely touched down), NOT by guessing from the status text.
+        Text-matching for the word "landed" was fragile: FlightRadar24
+        uses different wording across entries ("Arrived", locale
+        differences, etc.), and a board entry that had actually landed
+        but wasn't worded exactly as expected would incorrectly show
+        the aircraft as still sitting at its ORIGIN instead of where it
+        actually landed -- e.g. AMD landing PKR->KTM showing as still
+        "at PKR". If `has_landed` isn't available for some reason, this
+        falls back to the old text check rather than guessing blind.
       - source "cache": this is the last sector fleet_core personally
         saw the aircraft flying: since it's no longer visible flying
         anything newer, assume it landed and is sitting at the
@@ -550,6 +568,8 @@ def _current_airport_for_ground(sector, source, note):
     if source == "live":
         return origin
     if source == "board":
+        if has_landed is not None:
+            return dest if has_landed else origin
         return dest if "land" in (note or "").lower() else origin
     if source == "cache":
         return dest
@@ -605,7 +625,7 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
                 "sector": sector,
                 "sector_label": sector_label_of(sector),
                 "sector_source": source if sector else "unknown",
-                "callsign": f.callsign,
+                "callsign": f.callsign or hub_schedule.get(reg, {}).get("callsign"),
                 "altitude_ft": f.altitude,
                 "ground_speed_kt": f.ground_speed,
                 "vertical_speed_fpm": f.vertical_speed,
@@ -650,7 +670,15 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
             source = "unknown"
             note = "No sector data yet"
 
-        current_code = _current_airport_for_ground(sector, source, note)
+        # Distinguish "we know it hasn't landed" (timing exists, no real
+        # arrival yet -> trust that) from "we have no timing data at all"
+        # (timing missing entirely -> has_landed=None, so the function
+        # falls back to the text-based check instead of wrongly assuming
+        # not-landed when the status text might still say otherwise).
+        board_timing = hub_schedule.get(reg, {}).get("timing") if source == "board" else None
+        has_landed = bool(board_timing.get("real_arrival_ts")) if board_timing is not None else None
+
+        current_code = _current_airport_for_ground(sector, source, note, has_landed=has_landed)
         eta_fields = build_eta_fields(hub_schedule, reg)
         orig_code = sector.split("-")[0] if sector else None
         dest_code = sector.split("-")[1] if sector else None
@@ -676,7 +704,7 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp):
             "sector": sector,
             "sector_label": sector_label_of(sector),
             "sector_source": source,
-            "callsign": f.callsign if f is not None else None,
+            "callsign": f.callsign if f is not None else hub_schedule.get(reg, {}).get("callsign"),
             "altitude_ft": None,
             "ground_speed_kt": ground_speed,
             "vertical_speed_fpm": None,

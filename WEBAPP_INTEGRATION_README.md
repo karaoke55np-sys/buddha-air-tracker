@@ -451,6 +451,106 @@ this — the blank-key case correctly falls back to OpenStreetMap, and a
 filled-in key correctly builds the CARTO dark-tile URL with `?key=...`
 appended.
 
+## New: which aircraft is flying which flight number (Board <-> Live Tracker link)
+Every Flight Board card now shows a small aircraft badge (e.g. `✈ 9N-AOC`)
+next to flights the live tracker can identify, hover it to see status
+(`In the air (CRUISE)`, `Taxiing`, `On ground at KTM/Kathmandu`, etc.).
+
+**How it works:** `server.js` already cross-checks board flights against
+FlightRadar24 callsigns to confirm departure status (see the
+"Next Boarding" fix above) — this reuses the exact same matching logic
+(`BUD 855` → callsign digits `855` → `BHA855`), just now checking **all**
+tracked aircraft (air and ground), not only airborne ones, and attaching
+the matched registration + a human status label to the flight record
+instead of only using the match to flip status to "Departed."
+
+Tested directly: an airborne match correctly gets both the aircraft
+badge and the existing "Departed" override; a ground-only match (not
+yet airborne) correctly gets the badge without incorrectly being marked
+Departed; a flight with no live-tracker match correctly renders no badge
+at all rather than an empty/broken one.
+
+**Honest limitation:** this only works while `api_server.py` (the Python
+tracker) is running and reachable — if it's down, flights just show no
+aircraft badge, same graceful degradation as everywhere else this data
+is used.
+
+## New: aircraft-swap detection
+Building on the aircraft badge above: the app now remembers which
+registration it last confirmed operating each flight number, and flags
+it (a small amber "was 9N-ANZ" badge) when a *different* aircraft shows
+up on the same flight number later the same day — e.g. a technical
+swap, ANZ → AMU on `BHA551`.
+
+**Important limitation, by design, not a bug:** this can only ever
+reflect a swap once the *replacement aircraft* is itself actually
+broadcasting the new callsign — there's no way for FlightRadar24 (or
+anything external) to know about an internal ops decision before the
+new tail is physically configured and transmitting. That broadcast
+often starts on the ground (during taxi/pushback setup), so the swap
+can show up before takeoff, but not before the crew has actually begun
+configuring for that flight. There's a genuine blind spot between "the
+decision was made" and "the new aircraft starts transmitting" that no
+external system can close.
+
+Three things had to be gotten right to avoid false alarms, and I tested
+all three directly:
+- **No false flag on the very first sighting** of a flight number (there's
+  nothing to compare against yet).
+- **Correctly flags a genuine same-day swap** (verified ANZ → AMU
+  triggers the flag with the right "previous" registration recorded).
+- **No false flag across different days** — flight numbers get reused
+  daily, so the same registration reappearing the next day must never
+  be mistaken for a swap. Verified this resets correctly.
+
+## Fix: aircraft badge rarely showing on the Flight Board
+Your Render logs confirmed the pipeline itself was working correctly
+(Python sidecar running, cross-check succeeding, real data flowing) —
+the real cause was narrower than a bug: `callsign` was only ever
+populated from a **live** ADS-B signal, and most grounded aircraft
+(sourced from the schedule board or memory cache, not live radar) had
+`callsign: null` — so they could never match against the board's 37
+scheduled flights, even though everything was functioning as designed.
+
+**Fixed by pulling the callsign from a second source.** FlightRadar24's
+own schedule board data carries a flight identification callsign (e.g.
+`BHA705`) even for aircraft with no live signal at all — we just weren't
+capturing it. Now `hub_schedule` stores this board-side callsign, and a
+grounded aircraft with no live radar falls back to it, so it can be
+matched against the Flight Board well before it ever pushes back.
+
+Tested directly: confirmed the board callsign is captured correctly at
+the source, and that a grounded aircraft with genuinely no live signal
+at all (`by_reg` empty for it) now carries a matchable callsign pulled
+from the board data instead of `null`.
+
+This should noticeably widen how many of your scheduled flights show an
+aircraft badge, since coverage is no longer limited to only currently-
+transmitting aircraft.
+
+## Fix: grounded aircraft showing at the wrong airport (e.g. AMD at PKR instead of KTM)
+Root cause: deciding whether a grounded aircraft had actually landed was
+done by checking if the literal word "land" appeared in FlightRadar24's
+status text. FR24 doesn't always word it that way (e.g. "Arrived" or
+other phrasing) — when it didn't, an aircraft that had genuinely landed
+at its destination (like AMD landing PKR→KTM) got incorrectly shown as
+still sitting at its *origin* instead.
+
+**Fixed by using structured data instead of guessing from wording.**
+FlightRadar24 already gives us a real arrival timestamp that's only ever
+set once an aircraft has actually touched down — that's what now decides
+"has it landed," not string-matching. Text-matching only kicks in as a
+last-resort fallback when there's truly no timing data available at all
+(a rare, distinct case from "timing data exists but shows not-yet-landed").
+
+Tested three cases directly before sending: the exact reported bug
+(status worded "Arrived," no "land" substring, but a real arrival
+timestamp present) now correctly resolves to the destination; a
+genuinely not-yet-departed aircraft still correctly resolves to its
+origin; and the edge case where timing data is missing entirely still
+correctly falls back to text-matching rather than wrongly assuming
+not-landed.
+
 ## Deploying to Render
 Three new files handle this: `Dockerfile`, `requirements.txt`, and
 `render.yaml`. The app was already ported to run as one process that
