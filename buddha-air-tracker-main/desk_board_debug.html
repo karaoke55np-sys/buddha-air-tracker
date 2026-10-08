@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Buddha Air</title>
+    <link rel="icon" type="image/x-icon" href="https://desk.buddhaair.com/images/favicon.ico">
+
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Styles -->
+    <link rel="stylesheet" href="https://desk.buddhaair.com/css/bootstrap5.3.min.css">
+
+
+    <style>
+        body {
+            font-family: 'Roboto Mono';
+            font-weight: 700;
+            background-color: #1354A8 !important;
+            padding-left: 5% !important;
+        }
+
+        .primaryBlue {
+            color: #1354A8;
+        }
+
+        .paddingLeftRight {
+            padding-left: 4% !important;
+            padding-right: 4% !important;
+        }
+
+
+        .marquee {
+            z-index: -1;
+            position: relative;
+            box-sizing: border-box;
+            animation: marquee 70s linear 0s infinite;
+        }
+
+
+
+        @keyframes  marquee {
+            0% {
+                transform: translateY(0);
+            }
+            5% {
+                transform: translateY(0%);
+            }
+            /*!*15% {*!*/
+            /*!*    transform: translateY(0%);*!*/
+            /*!*}*!*/
+            /*18% {*/
+            /*    transform: translateY(-3%);*/
+            /*}*/
+            /*20% {*/
+            /*    transform: translateY(-5%);*/
+            /*}*/
+            /*25% {*/
+            /*    transform: translateY(-10%);*/
+            /*}*/
+            /*30% {*/
+            /*    transform: translateY(-15%);*/
+            /*}*/
+            /*35% {*/
+            /*    transform: translateY(-20%);*/
+            /*}*/
+            /*40% {*/
+            /*    transform: translateY(-25%);*/
+            /*}*/
+            /*45% {*/
+            /*    transform: translateY(-30%);*/
+            /*}*/
+            /*50% {*/
+            /*    transform: translateY(-35%);*/
+            /*}*/
+            /*55% {*/
+            /*    transform: translateY(-45%);*/
+            /*}*/
+            /*60% {*/
+            /*    transform: translateY(-50%);*/
+            /*}*/
+            /*65% {*/
+            /*    transform: translateY(-55%);*/
+            /*}*/
+            /*70% {*/
+            /*    transform: translateY(-65%);*/
+            /*}*/
+            /*75% {*/
+            /*    transform: translateY(-70%);*/
+            /*}*/
+            /*80% {*/
+            /*    transform: translateY(-75%);*/
+            /*}*/
+            /*85% {*/
+            /*    transform: translateY(-85%);*/
+            /*}*/
+            /*90% {*/
+            /*    transform: translateY(-90%);*/
+            /*}*/
+            /*90% {*/
+            /*    transform: translateY(-90%);*/
+            /*}*/
+            /*95% {*/
+            /*    transform: translateY(-95%);*/
+            /*}*/
+            100% {
+                transform: translateY(-100%);
+            }
+        }
+
+        th, thead {
+            position: relative;
+            z-index: 2;
+            background-color: white;
+        }
+
+        th {
+            background-color: #1354A8 !important;
+            color: #ffffff !important;
+        }
+
+        .table > :not(caption) > * > * {
+            background-color: unset;
+            color: unset;
+        }
+
+        .table tbody tr:nth-child(even) {
+            background-color: #1354A8 !important;
+            color: #ffffff !important;
+        }
+
+        .table tbody tr:nth-child(odd) {
+            background-color: #2761ad !important;
+            color: #ffffff !important;
+        }
+
+        table {
+            border-collapse: collapse
+        }
+
+        .modal-backdrop {
+            opacity: 0.8 !important;
+        }
+
+        .fade-scale {
+            transition: all 1s linear;
+        }
+
+        @keyframes  fade-scale {
+            0% {
+                transform: scale(0.8);
+            }
+            50% {
+                transform: scale(0.9);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        .marginTop {
+            margin-top: 3.5%;
+        }
+
+        .boardingText {
+            background: #1354a8;
+            padding: 9px;
+            border-radius: 10px;
+            font-size: 42px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid" id="container">
+    <div class="fixed-top">
+        <div class="row align-items-center paddingLeftRight headingHeight" style="background: #ffffff;font-family: 'Verdana';">
+            <div class="col-6 align-middle pt-2">
+                <img src="https://desk.buddhaair.com/images/buddhaair.png" style="width: 50vh" class="ms-3">
+            </div>
+            <div class="col-6 text-end primaryBlue  pt-3 pe-5" style="font-size: 30px">
+                <span id="time"></span>
+                <p>September 06, 2026 Sunday</p>
+            </div>
+        </div>
+                <div class="row" id="tableHeight" style="overflow-y: scroll;">
+            <table class="table table-borderless" style="font-size: 39px;">
+                <thead style="border-bottom: 2px solid #6c6969;">
+                <tr style="line-height: 64px; font-family: 'Roboto Slab'; font-weight: 400 !important;">
+                    <th width="12%" style="padding-left: 4%;font-weight: 400;">TIME</th>
+                    <th width="20%" style="font-weight: 400;padding-left: 2%;">DESTINATION</th>
+                    <th width="13%" style="padding-left: 2%;font-weight: 400;">FLIGHT</th>
+                    <th width="22%" style="font-weight: 400;">STATUS</th>
+                    <th style="font-weight: 400;padding-right: 4%">REMARKS</th>
+                </tr>
+                </thead>
+                <tbody id="scrollText">
+                                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">11:35</td>
+                        <td style="padding-left: 2%;">BHADRAPUR</td>
+                        <td style="padding-left: 2%;">955</td>
+                        <td style="">NEXT BOARDING</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:00</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">611</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:00</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">855</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:15</td>
+                        <td style="padding-left: 2%;">NEPALGUNJ</td>
+                        <td style="padding-left: 2%;">405</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:25</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">661</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:25</td>
+                        <td style="padding-left: 2%;">RAJBIRAJ</td>
+                        <td style="padding-left: 2%;">171</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:35</td>
+                        <td style="padding-left: 2%;">BHARATPUR</td>
+                        <td style="padding-left: 2%;">357</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:40</td>
+                        <td style="padding-left: 2%;">JANAKPUR</td>
+                        <td style="padding-left: 2%;">505</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">12:50</td>
+                        <td style="padding-left: 2%;">BHADRAPUR</td>
+                        <td style="padding-left: 2%;">957</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">13:20</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">857</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">13:20</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">613</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">13:20</td>
+                        <td style="padding-left: 2%;">BIRATNAGAR</td>
+                        <td style="padding-left: 2%;">707</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">13:55</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">663</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">14:20</td>
+                        <td style="padding-left: 2%;">SURKHET</td>
+                        <td style="padding-left: 2%;">137</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">14:25</td>
+                        <td style="padding-left: 2%;">SIMARA</td>
+                        <td style="padding-left: 2%;">555</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">14:30</td>
+                        <td style="padding-left: 2%;">BHARATPUR</td>
+                        <td style="padding-left: 2%;">371</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">14:35</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">801</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">14:40</td>
+                        <td style="padding-left: 2%;">BIRATNAGAR</td>
+                        <td style="padding-left: 2%;">709</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:00</td>
+                        <td style="padding-left: 2%;">BHARATPUR</td>
+                        <td style="padding-left: 2%;">C373</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:25</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">615</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:30</td>
+                        <td style="padding-left: 2%;">DHANGADHI</td>
+                        <td style="padding-left: 2%;">253</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:30</td>
+                        <td style="padding-left: 2%;">BHARATPUR</td>
+                        <td style="padding-left: 2%;">379</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:40</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">859</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:50</td>
+                        <td style="padding-left: 2%;">NEPALGUNJ</td>
+                        <td style="padding-left: 2%;">407</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">15:55</td>
+                        <td style="padding-left: 2%;">BIRATNAGAR</td>
+                        <td style="padding-left: 2%;">713</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">16:00</td>
+                        <td style="padding-left: 2%;">JANAKPUR</td>
+                        <td style="padding-left: 2%;">507</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">16:10</td>
+                        <td style="padding-left: 2%;">SIMARA</td>
+                        <td style="padding-left: 2%;">559.</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">16:30</td>
+                        <td style="padding-left: 2%;">BHADRAPUR</td>
+                        <td style="padding-left: 2%;">959</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">17:00</td>
+                        <td style="padding-left: 2%;">BIRATNAGAR</td>
+                        <td style="padding-left: 2%;">711</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">17:00</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">617</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">17:20</td>
+                        <td style="padding-left: 2%;">NEPALGUNJ</td>
+                        <td style="padding-left: 2%;">409</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">17:35</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">803</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">18:00</td>
+                        <td style="padding-left: 2%;">JANAKPUR</td>
+                        <td style="padding-left: 2%;">509</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">18:00</td>
+                        <td style="padding-left: 2%;">POKHARA</td>
+                        <td style="padding-left: 2%;">619</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">18:20</td>
+                        <td style="padding-left: 2%;">BIRATNAGAR</td>
+                        <td style="padding-left: 2%;">715</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                        <tr style="line-height: 64px;font-family: 'Roboto Mono';">
+                        <td style="padding-left: 4%;">18:35</td>
+                        <td style="padding-left: 2%;">BHAIRAHAWA</td>
+                        <td style="padding-left: 2%;">805</td>
+                        <td style="">ON-TIME</td>
+                        <td style="font-size: 26px;line-height: normal;padding-right: 4%;"></td>
+                    </tr>
+                                                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+<div class="row fixed-bottom footerHeight" style="padding-top:1vh; padding-bottom:1vh;background-color: #ffffff;">
+    <div class="col-12 align-middle text-center" style="font-size: 20px">
+        <span class="align-middle primaryBlue">
+           buddhatech.info © <span id="year"></span>|Powered By: BuddhaTech
+        </span>
+    </div>
+</div>
+
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a36b38bcad8d58b9',t:'MTc4ODY3NDA5Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"46ff409ecb25462ba88612502b62861c","r":1,"spa":2}' crossorigin="anonymous"></script>
+</body>
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+
+
+
+<script src="https://desk.buddhaair.com/js/bootstrap5.3.min.js"></script>
+<script src="https://desk.buddhaair.com/js/bootstrap5.3.bundle.js"></script>
+
+
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/laravel-echo/1.15.1/echo.iife.min.js"></script>
+
+<script src="https://js.pusher.com/4.1/pusher.min.js"></script>
+
+<script>
+    let heightOfScreen = window.innerHeight;
+    const boardingHeightElement = document.querySelector(".boardingHeight");
+    const boardingHeight = boardingHeightElement ? boardingHeightElement.offsetHeight : 0;
+    const headingHeightElement = document.querySelector(".headingHeight");
+    const headingHeight = headingHeightElement.offsetHeight;
+    const footerHeightElement = document.querySelector(".footerHeight");
+    const footerHeight = footerHeightElement.offsetHeight;
+    console.log(heightOfScreen, headingHeight, boardingHeight, footerHeight);
+    const tableHeight = heightOfScreen - boardingHeight - headingHeight - footerHeight - 20;
+    document.getElementById("tableHeight").style.height = tableHeight+'px';
+
+    document.getElementById("year").innerHTML = new Date().getFullYear();
+
+    Pusher.logToConsole = true;
+    window.Echo = new Echo({
+        broadcaster: 'pusher',
+        key: "a9f30fad2ee7a07f8d7b",
+        cluster: 'ap1',
+        encrypted: true,
+        logToConsole: true,
+        // authEndpoint: "/broadcast/auth"
+    });
+    const gate = 'gate.' + "ktm";
+    console.log(gate);
+    Echo.private(gate)
+        .listen('NewMessageNotification', (e) => {
+            location.reload();
+        });
+
+    let scrollNumber = 0;
+    let tableOriginBottom = 0;
+    let falseStatement = true;
+
+    function getBottom() {
+        return document.getElementById("scrollText").getBoundingClientRect();
+    }
+    let showAds = false;
+    startTime();
+
+    function startTime() {
+        // const getCurrentPosition = parseInt(getBottom().y);
+        const today = new Date();
+        const h = today.getHours();
+        let m = today.getMinutes();
+        let s = today.getSeconds();
+        m = checkTime(m);
+        s = checkTime(s);
+        document.getElementById('time').innerHTML = h + ":" + m + ":" + s;
+
+        /*if (m % 2 !== 0) {
+            showAds = true;
+        }
+        if (m % 2 === 0 && showAds) {
+            showAds = false;
+            $('#advertisement').modal('show');
+            setTimeout(function () {
+                $('#advertisement').modal('hide');
+            }, 5000);
+        }*/
+
+        // console.log(m);
+        // if (getCurrentPosition !== tableOriginBottom) {
+        //     falseStatement = true;
+        // }
+        // if (getCurrentPosition === tableOriginBottom && falseStatement) {
+        //     falseStatement = false;
+        //     scrollNumber = scrollNumber + 1;
+        //     if (scrollNumber == 2) {
+        //         scrollNumber = 0;
+        //         $('#advertisement').modal('show');
+        //         setTimeout(function () {
+        //             $('#advertisement').modal('hide');
+        //         }, 4000);
+        //     }
+        // }
+        setTimeout(startTime, 1000);
+    }
+
+    function checkTime(i) {
+        if (i < 10) {
+            i = "0" + i
+        }
+        return i;
+    }
+
+    // tableOriginBottom = parseInt(document.getElementById("scrollText").getBoundingClientRect().y);
+
+</script>
+</html>

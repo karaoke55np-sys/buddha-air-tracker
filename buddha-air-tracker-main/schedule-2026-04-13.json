@@ -1,0 +1,294 @@
+{
+  "date": "2026-04-13",
+  "flights": [
+    {
+      "id": "BUD 403",
+      "flightNumber": "BUD 403",
+      "time": "10:25",
+      "destination": "NEPALGUNJ",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 609",
+      "flightNumber": "BUD 609",
+      "time": "10:35",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 955",
+      "flightNumber": "BUD 955",
+      "time": "11:00",
+      "destination": "BHADRAPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 371",
+      "flightNumber": "BUD 371",
+      "time": "11:05",
+      "destination": "BHARATPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 611",
+      "flightNumber": "BUD 611",
+      "time": "11:40",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 811",
+      "flightNumber": "BUD 811",
+      "time": "12:05",
+      "destination": "BHAIRAHAWA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 555.",
+      "flightNumber": "BUD 555.",
+      "time": "12:30",
+      "destination": "SIMARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 613",
+      "flightNumber": "BUD 613",
+      "time": "12:40",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 405",
+      "flightNumber": "BUD 405",
+      "time": "12:45",
+      "destination": "NEPALGUNJ",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 707",
+      "flightNumber": "BUD 707",
+      "time": "13:00",
+      "destination": "BIRATNAGAR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 615",
+      "flightNumber": "BUD 615",
+      "time": "13:40",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 507",
+      "flightNumber": "BUD 507",
+      "time": "14:05",
+      "destination": "JANAKPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 859",
+      "flightNumber": "BUD 859",
+      "time": "14:15",
+      "destination": "BHAIRAHAWA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 357",
+      "flightNumber": "BUD 357",
+      "time": "14:20",
+      "destination": "BHARATPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 957",
+      "flightNumber": "BUD 957",
+      "time": "14:20",
+      "destination": "BHADRAPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 617",
+      "flightNumber": "BUD 617",
+      "time": "14:40",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 711",
+      "flightNumber": "BUD 711",
+      "time": "14:50",
+      "destination": "BIRATNAGAR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 557.",
+      "flightNumber": "BUD 557.",
+      "time": "14:55",
+      "destination": "SIMARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 253",
+      "flightNumber": "BUD 253",
+      "time": "15:30",
+      "destination": "DHANGADHI",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 379",
+      "flightNumber": "BUD 379",
+      "time": "15:45",
+      "destination": "BHARATPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 407",
+      "flightNumber": "BUD 407",
+      "time": "15:55",
+      "destination": "NEPALGUNJ",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 509",
+      "flightNumber": "BUD 509",
+      "time": "16:25",
+      "destination": "JANAKPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 801",
+      "flightNumber": "BUD 801",
+      "time": "16:30",
+      "destination": "BHAIRAHAWA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 661",
+      "flightNumber": "BUD 661",
+      "time": "16:50",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 713",
+      "flightNumber": "BUD 713",
+      "time": "16:55",
+      "destination": "BIRATNAGAR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 559.",
+      "flightNumber": "BUD 559.",
+      "time": "17:00",
+      "destination": "SIMARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 959",
+      "flightNumber": "BUD 959",
+      "time": "17:25",
+      "destination": "BHADRAPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 663",
+      "flightNumber": "BUD 663",
+      "time": "17:30",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 511",
+      "flightNumber": "BUD 511",
+      "time": "17:50",
+      "destination": "JANAKPUR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 715",
+      "flightNumber": "BUD 715",
+      "time": "18:05",
+      "destination": "BIRATNAGAR",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 805",
+      "flightNumber": "BUD 805",
+      "time": "18:15",
+      "destination": "BHAIRAHAWA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    },
+    {
+      "id": "BUD 665",
+      "flightNumber": "BUD 665",
+      "time": "18:30",
+      "destination": "POKHARA",
+      "status": "Scheduled",
+      "remarks": "Learned from real-time data",
+      "source": "Learned"
+    }
+  ],
+  "savedAt": "2026-04-13T04:30:07.900Z"
+}
