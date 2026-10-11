@@ -400,8 +400,9 @@ known network, and the two sides differ (with one explicit exception:
 loops back to Kathmandu). Anything failing this — a garbage/unrecognized
 airport code, a same-airport pair that isn't the Everest case, a bad
 parse — is treated exactly like "no sector data" and falls through to
-the next source in the normal priority chain (live → board → cache →
-unknown) instead of ever being displayed.
+the next source in the normal priority chain (live → completed board
+event → fresh cache → tentative board plan → unknown) instead of ever
+being displayed.
 
 This is applied at **every** point a sector can enter the system:
 - Schedule-board entries are filtered at the source, in
@@ -631,6 +632,88 @@ reproducing them, not guessed at:
   aircraft actually broadcasting that callsign. A guess can no longer
   appear as fact (this is the ANZ -> AMU swap risk). The cost: more
   aircraft honestly show Unknown instead of a guess.
+  *(Superseded — see "Keeping sectors on screen when parked" below: the
+  badge rule still holds, but a future rotation is now shown again as an
+  explicitly labelled tentative sector rather than dropped, because
+  dropping it left the whole parked fleet on "Sector unknown".)*
+
+### Keeping sectors on screen when parked
+**Symptom:** opening the app showed sectors for only a couple of
+aircraft (typically 9N-AMD and 9N-AOS); the rest of the fleet sat on
+"Sector unknown", and their airport filters collapsed into one
+"Unknown" chip.
+
+**Root cause — measured, not guessed.** At 00:36 NPT the code was asked
+what it could actually see, and the honest answer was very little:
+- `fetch_tracked_flights` returned **0** of the 16 aircraft. FR24's live
+  feed carried 164 aircraft over Nepal and **none** of them were ours
+  (parked aircraft mostly are not being broadcast).
+- The KTM arrivals board carried 100 entries but only **15 with any
+  registration at all**, of which just **2** were Buddha Air tails
+  (AMD and AOS, both "Landed"). The KTM departures board had **0**
+  Buddha tails. PHH and BIR boards had none either.
+- The sector cache was empty (fresh start / cold deploy).
+
+So 14 of 16 aircraft genuinely had no source left, and both code paths
+that could have softened that were closed:
+1. A board entry whose status is exactly `"Scheduled"` was skipped
+   outright — and outside a few hours around midday that is what
+   *every* entry for a *parked* aircraft says. Nothing survived.
+2. Anything the board did return was then re-filtered in
+   `build_fleet_records` to confirmed-only, discarding the tentative
+   tier a second time.
+3. A later DEPARTURE entry overwrote the earlier ARRIVAL entry for the
+   same aircraft, so the sector it had just flown — and the airport that
+   landing put it at — was thrown away.
+
+**What changed:**
+- Board entries are ranked in four trust tiers (`scheduled` <
+  `provisional` < `imminent` < `done`) instead of being kept/dropped.
+  A firmer tier always beats a weaker one for the same aircraft.
+- `last_done` is tracked separately: the most recent arrival that really
+  landed, plus `at_airport`. A parked aircraft is at the destination of
+  the flight it last completed, so that is what its card shows — the
+  landing is not erased by a later departure entry.
+- A "next flight" slot is kept separately from "what it just did", and
+  chosen by *soonest* departure within its tier. An imminent departure
+  (within `NEAR_TERM_DEPARTURE_WINDOW_SEC`) takes over from a landing
+  that happened hours ago; an entry that already happened still wins
+  otherwise.
+- The tentative tier is shown again as `sector_source:
+  "board_provisional"` → labelled **"Airport board (tentative)"**, and
+  it is always the *last* resort: a live fix or a fresh cache entry
+  beats it. A tentative sector can never displace a confirmed one, and
+  the Flight Board badge rule (callsign must be broadcast) is unchanged.
+- `build_eta_fields` now only attaches timing when the board entry
+  really describes the sector being displayed, so a completed sector is
+  no longer tagged with the ETA of a different, unflown leg.
+
+**Also fixed while measuring:** every position query failing (FR24
+answers `HTTP 429` when rate-limited) used to look exactly like "the
+whole fleet is on the ground with no sectors". `fetch_positions` now
+raises if *no* query answered, so the server keeps serving its last good
+snapshot instead of blanking the fleet, and `api_server.py` pauses both
+loops for 120s after a 429 rather than retrying into the block
+(4 queries every 10s is what provokes it).
+
+**What this cannot fix.** If FR24 is neither broadcasting an aircraft
+nor listing it on a board we read, nothing can be known about it — and
+the code will not invent it. With the numbers above that still leaves
+parked aircraft on "unknown" at night. Two real ways out, both of which
+need a decision:
+- **Persistent cache:** commit a seeded `data/buddha_air_sector_cache.json`
+  of each aircraft's last observed sector. That data is real but from a
+  previous observation window (it expires after `CACHE_MAX_AGE_HOURS`,
+  currently 12), and would be labelled as "last seen".
+- **A tail-specific source:** Buddha Air's own rotation/dispatch data
+  (the desk board shows flight numbers, not tail numbers). If a mapping
+  of flight → tail exists anywhere, the sector can be filled in from it
+  instead of from FR24's board.
+
+The right permanent fix for the fleet view is the Render Disk already
+described below — `FLEET_DATA_DIR=/app/data` keeps the sector cache and
+arrival times across deploys, so the fleet fills in as aircraft fly and
+never starts from empty again.
 
 ### Why data can still look empty or wrong on Render's free plan
 Render's free web service spins down after about 15 minutes with no

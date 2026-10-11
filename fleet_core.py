@@ -129,6 +129,16 @@ TAXI_SPEED_KT = 3
 # provisional/typical aircraft that can still change before departure.
 NEAR_TERM_DEPARTURE_WINDOW_SEC = 90 * 60
 
+# Relative trust of the schedule-board entries, worst first, used so a
+# firmer entry for an aircraft always wins over a weaker one:
+#   "scheduled"   -- FR24's least firm wording ("Scheduled"); the tail is
+#                    often just the typical aircraft for that route.
+#   "provisional" -- a real tail on a flight that is still some way off.
+#   "imminent"    -- that flight is due within the near-term window.
+#   "done"        -- the event has already happened (landed / departed).
+# Anything below "done" is labelled tentative in the app.
+_TIER_RANK = {"scheduled": 0, "provisional": 1, "imminent": 2, "done": 3}
+
 # Friendly names for common Nepali domestic airports (extend as needed --
 # unknown codes just show as-is).
 AIRPORT_NAMES = {
@@ -389,6 +399,7 @@ def fetch_tracked_flights(fr):
     based on query ordering.
     """
     sightings = {}  # registration -> list of every Flight object seen this cycle
+    failures = []   # (label, exception) for every query that did not answer
 
     def record(f):
         if f.registration in FLEET:
@@ -400,6 +411,7 @@ def fetch_tracked_flights(fr):
             for f in fr.get_flights(bounds=bounds):
                 record(f)
         except Exception as e:
+            failures.append((f"airport-zoom {code}", e))
             print(f"[airport-zoom fetch failed for {code}] {e}")
 
     try:
@@ -407,7 +419,16 @@ def fetch_tracked_flights(fr):
         for f in fr.get_flights(bounds=bounds):
             record(f)
     except Exception as e:
+        failures.append(("wide-area", e))
         print(f"[wide-area fetch failed] {e}")
+
+    # If NOT ONE query answered, this is not "the fleet is on the ground",
+    # it is "we have no data": FlightRadar24 being unreachable or
+    # rate-limiting us (HTTP 429) must not be allowed to masquerade as a
+    # full fleet of grounded aircraft with no sectors. Raise instead, so
+    # the caller keeps showing the last good snapshot and backs off.
+    if failures and len(failures) == len(AIRPORT_COORDS) + 1:
+        raise RuntimeError(f"every position query failed ({failures[0][0]}: {failures[0][1]})")
 
     by_reg = {}
     for reg, flights in sightings.items():
@@ -456,10 +477,12 @@ def _fmt_local_time(ts):
     return datetime.datetime.fromtimestamp(ts, tz=NEPAL_TZ).strftime("%H:%M")
 
 
-def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=None):
-    """Query one airport's schedule board and merge matches into the
-    shared best_ts/result dicts (mutated in place), keeping whichever
-    entry per registration has the latest timestamp.
+def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=None,
+                                   last_done=None, plan_ts=None, plans=None):
+    """Query one airport's schedule board and merge matches into the shared
+    best_ts/result/plans dicts (mutated in place): `result` keeps the most
+    recent thing each aircraft has COMPLETED, and `plans` keeps the flight
+    it is due to operate NEXT.
 
     Trust filtering, to avoid showing a wrong/stale sector -- but without
     throwing away information that's still worth showing at reduced
@@ -467,9 +490,14 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
     entries entirely, which fixed a real accuracy bug but also pushed
     too many aircraft into "Sector unknown" when a reasonable, clearly
     labeled guess was actually available):
-      - A bare "Scheduled" status carries a default/typical aircraft for
-        that route, not a confirmed real tail -- always skipped, no
-        confidence level rescues this one, it's not a real assignment.
+      - A bare "Scheduled" status is FlightRadar24's least firm wording,
+        so it is kept as the WEAKEST tier rather than trusted: it can
+        never replace a confirmed event, and callers show it only when
+        nothing better exists, labelled as tentative. It is not dropped,
+        because outside a few hours around the middle of the day almost
+        every entry on the board for a parked aircraft is exactly this --
+        dropping them was what left most of the fleet showing "Sector
+        unknown" for hours on end.
       - An entry describing something that's already happened (landed /
         departed) or is imminent/overdue (within
         NEAR_TERM_DEPARTURE_WINDOW_SEC) is marked "confirmed": airline
@@ -477,9 +505,21 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
       - A pending entry further out than that is marked "provisional"
         instead of being dropped -- still a real tail FR24 is currently
         showing for that route, just with a higher chance of changing
-        before it actually happens. A provisional entry can NEVER
-        overwrite a confirmed one for the same aircraft (regardless of
-        timestamp), only another provisional entry can replace it.
+        before it actually happens. A pending ENTRY can never overwrite
+        a confirmed one for the same aircraft (regardless of timestamp),
+        only another pending entry can replace it.
+
+    Two extra outputs, both needed to describe a parked aircraft without
+    ever inventing anything (this is what left the fleet showing "Sector
+    unknown" between flights):
+      - last_done: the most recent arrival that has really landed, kept
+        separately because a later DEPARTURE entry would otherwise
+        replace it and hide both the sector it just flew and the airport
+        it is now sitting at. A parked aircraft is at the destination of
+        the flight it last completed.
+      - plan_ts: timestamps for the "next flight" entries kept in
+        `result`, so callers can tell a confirmed, imminent assignment
+        apart from a tentative one further out.
     """
     try:
         raw = fr.get_airport_details(airport_code, flight_limit=100)
@@ -506,8 +546,10 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
                 continue
 
             status = (_dig(flight, "status", "text") or "").strip()
-            if status.lower() == "scheduled":
-                continue
+            if not status:
+                # No status and no timing would mean nothing to go on at
+                # all; a status of "Scheduled" is kept, but ranked lowest.
+                status = "Scheduled"
 
             other_code = _dig(flight, "airport", other_side, "code", "iata")
             if not other_code:
@@ -546,6 +588,17 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
                     landings[reg] = {"ts": real_arr, "airport": airport_code, "from": other_code}
 
             confirmed = already_happened or ts <= now_ts + NEAR_TERM_DEPARTURE_WINDOW_SEC
+            # Which of the four trust tiers this entry sits in. "Scheduled"
+            # is FR24's least firm wording and stays near the bottom no
+            # matter how near-term it is.
+            if already_happened:
+                tier = "done"
+            elif status.lower().startswith("scheduled"):
+                tier = "scheduled"
+            elif confirmed:
+                tier = "imminent"
+            else:
+                tier = "provisional"
 
             # Also capture the flight's own identification callsign
             # (e.g. "BHA855") straight from the board -- this is what
@@ -555,24 +608,70 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
             # aircraft never get one until they actually push back).
             board_callsign = _dig(flight, "identification", "callsign")
 
-            existing = result.get(reg)
-            existing_confirmed = bool(existing and existing.get("confirmed"))
-            should_replace = (
-                existing is None
-                or (confirmed and not existing_confirmed)  # confirmed always beats provisional
-                or (confirmed == existing_confirmed and ts >= best_ts.get(reg, 0))  # same tier: latest wins
-            )
+            entry_data = {
+                "sector": f"{orig}-{dest}",
+                "status": status or section_name,
+                "timing": _extract_timing(flight),
+                "callsign": board_callsign,
+                "confirmed": confirmed,
+                "tier": tier,
+                "ts": ts,
+                "upcoming": not already_happened,
+            }
 
-            if should_replace:
-                best_ts[reg] = ts
-                result[reg] = {
-                    "sector": f"{orig}-{dest}",
-                    "status": status or section_name,
-                    "timing": _extract_timing(flight),
-                    "callsign": board_callsign,
-                    "confirmed": confirmed,
-                }
-                found_any = True
+            # The flight this aircraft most recently COMPLETED -- kept
+            # apart from the "best entry" below, because for a parked
+            # aircraft this is both the sector it last flew and the
+            # airport it is standing at right now.
+            if last_done is not None and already_happened and section_name == "arrivals" \
+                    and _is_plausible_sector(entry_data["sector"]):
+                prev = last_done.get(reg)
+                if prev is None or ts >= prev.get("ts", 0):
+                    last_done[reg] = dict(entry_data, at_airport=airport_code)
+
+            # Two independent "best" slots per aircraft:
+            #   result -- the most recent COMPLETED event (what it just did)
+            #   plans  -- the entry that is DUE SOONEST (what it does next)
+            # Keeping them separate stops a landing from hours ago from
+            # outranking the departure that is about to leave just because
+            # "latest timestamp" happens to favour the old event.
+            existing = result.get(reg)
+            existing_rank = _TIER_RANK.get(existing.get("tier") if existing else None, -1)
+            my_rank = _TIER_RANK[tier]
+
+            if already_happened:
+                if existing is None or existing.get("upcoming") or ts >= best_ts.get(reg, 0):
+                    best_ts[reg] = ts
+                    result[reg] = entry_data
+                    found_any = True
+            elif plans is not None:
+                # Keep this as the "next flight": firmer tier wins, and
+                # within a tier the soonest departure is the relevant one.
+                existing_plan = plans.get(reg)
+                plan_rank = _TIER_RANK.get(existing_plan.get("tier") if existing_plan else None, -1)
+                if existing_plan is None or my_rank > plan_rank:
+                    should_store = True
+                elif my_rank < plan_rank:
+                    should_store = False
+                else:
+                    prev_ts = plan_ts.get(reg)
+                    should_store = prev_ts is None or ts < prev_ts
+                if should_store:
+                    plans[reg] = entry_data
+                    plan_ts[reg] = ts
+                    found_any = True
+                if existing is None or existing.get("upcoming"):
+                    # Nothing completed is known for this aircraft yet, so
+                    # the plan is also the best answer available.
+                    result[reg] = entry_data
+                    best_ts[reg] = ts
+            else:
+                # No separate plans store: one slot per aircraft, keeping
+                # whichever entry is the firmer of the two.
+                if existing is None or my_rank > existing_rank:
+                    best_ts[reg] = ts
+                    result[reg] = entry_data
+                    found_any = True
 
     if not found_any:
         try:
@@ -588,27 +687,84 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
 def fetch_hub_schedule(fr):
     """
     Check Kathmandu's schedule board plus any SECONDARY_AIRPORTS, and
-    return {registration: {"sector": "ORIG-DEST", "status": text}} for
-    any Buddha Air tail number found, keeping the most recent sighting
-    per aircraft across all boards checked.
+    return {registration: entry} for every Buddha Air tail number found
+    across all boards checked.
+
+    Each entry describes the MOST RELEVANT flight known for that aircraft:
+    the one it is due to operate next if that is due within the near-term
+    window, otherwise the most recent thing it completed. It carries:
+      - "sector", "status", "callsign", "timing": as before.
+      - "tier"/"confirmed": "done" (already landed/departed), "imminent"
+        (due within the near-term window), "provisional" (a real tail,
+        further out) or "scheduled" (FR24's least firm wording). Anything
+        below "done" is shown in the app as "Airport board (tentative)".
+      - "last_done": the most recent arrival that has really landed, plus
+        "at_airport" -- the airport that landing put the aircraft at.
+        This is what lets a parked aircraft still show the sector it
+        just flew and where it is standing, hours after landing, without
+        anyone having to guess from a future flight plan.
+      - "last_landing": raw touchdown timestamp/details (see
+        update_ground_since).
     """
     result = {}
     best_ts = {}
+    plan_ts = {}
+    plans = {}
     landings = {}
+    last_done = {}
     for airport_code in [HUB_AIRPORT] + SECONDARY_AIRPORTS:
-        _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings)
+        _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings,
+                                       last_done=last_done, plan_ts=plan_ts, plans=plans)
+
+    # An imminent next flight is the more relevant fact whenever we have
+    # one: it is about to happen, and its origin side is where the
+    # aircraft is standing. It replaces the completed entry as this
+    # aircraft's primary record; anything less certain than "imminent"
+    # stays in the background as a labelled fallback (see
+    # build_fleet_records).
+    for reg, plan in plans.items():
+        if plan.get("tier") == "imminent":
+            merged = dict(plan)
+            if reg in last_done:
+                merged["last_done"] = last_done[reg]
+            result[reg] = merged
+        elif reg not in result:
+            result[reg] = plan
+        else:
+            result[reg].setdefault("plan", plan)
+
     for reg, landing in landings.items():
         if reg in result:
             result[reg]["last_landing"] = landing
+    for reg, done in last_done.items():
+        # An aircraft can be known only from its last completed arrival
+        # (every later board entry about it fell outside the trusted
+        # window) -- that is still a fact worth keeping, so give it a
+        # record of its own rather than dropping it.
+        entry = result.setdefault(reg, {
+            "sector": done["sector"],
+            "status": done["status"],
+            "timing": done.get("timing"),
+            "callsign": done.get("callsign"),
+            "ts": done.get("ts", 0),
+            "tier": "done",
+            "confirmed": True,
+        })
+        entry["last_done"] = done
     return result
 
 
-def build_eta_fields(hub_schedule, reg):
+def build_eta_fields(hub_schedule, reg, sector=None):
     """
     Turns a hub_schedule timing entry into the fields the frontend
     actually displays. Returns a dict with everything set to None when
     there's nothing to show, so callers can always merge this in
     unconditionally.
+
+    When `sector` is given, the timing is only used if the board entry
+    really describes that same flight -- otherwise an aircraft whose card
+    shows the sector it already completed would be tagged with the ETA of
+    a completely different, not-yet-flown leg.
     """
     empty = {
         "eta_time": None, "eta_minutes": None,
@@ -616,6 +772,8 @@ def build_eta_fields(hub_schedule, reg):
     }
     entry = hub_schedule.get(reg)
     if not entry or not entry.get("timing"):
+        return empty
+    if sector is not None and entry.get("sector") != sector:
         return empty
 
     timing = entry["timing"]
@@ -745,7 +903,8 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
       "status": "air",                 # "air" | "ground"
       "sector": "BDP-KTM",             # or None
       "sector_label": "BDP/Bhadrapur -> KTM/Kathmandu",
-      "sector_source": "live",         # "live" | "board" | "cache" | "unknown"
+      "sector_source": "live",         # "live" | "board" | "board_provisional"
+                                       # | "cache" | "unknown"
       "callsign": "BHA954",
       "altitude_ft": 16525,
       "ground_speed_kt": 237,
@@ -762,38 +921,58 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
     records = []
     ground_since = ground_since or {}
 
-    # Strict: only schedule-board entries for something that has already
-    # happened (landed / departed) or is imminent are ever used. Anything
-    # further out is FlightRadar24's guess at a future rotation -- a tail
-    # that can still change (the ANZ -> AMU swap case) -- so it is never
-    # shown as a sector, an ETA or a flight assignment.
-    hub_schedule = {r: e for r, e in hub_schedule.items() if e.get("confirmed", True)}
-
+    # Board entries are used in two clearly separated roles, because for a
+    # parked aircraft the two questions ("which sector did it last fly?"
+    # and "where is it standing?") have different right answers:
+    #
+    #   - An IMMINENT entry (its next flight is due within the near-term
+    #     window) is the most relevant thing to show: the aircraft is
+    #     about to fly it, and being the origin side tells us where it is
+    #     parked right now.
+    #   - Otherwise the most recent COMPLETED event is used -- the sector
+    #     it just flew, whose destination is where it now stands.
+    #   - A TENTATIVE entry (tier "provisional"/"scheduled") still counts,
+    #     but only ever as a labelled last resort, and only where nothing
+    #     we actually observed is available. Discarding these was what
+    #     left most of the fleet showing "Sector unknown" -- outside a few
+    #     hours around the middle of the day, every board entry for a
+    #     parked aircraft is a future rotation.
+    #   - entry["last_done"] is the most recent arrival that really
+    #     landed: the sector it just flew, and a hard fact about which
+    #     airport it is now parked at.
     for reg in FLEET:
         f = by_reg.get(reg)
+        board = hub_schedule.get(reg) or {}
+        last_done = board.get("last_done") or None
+        # An imminent next flight takes over from the completed one, so
+        # the card describes what this aircraft is doing now rather than
+        # a landing from hours ago.
+        if board.get("tier") == "imminent":
+            last_done = None
+        planned = bool(board) and not board.get("confirmed", True)
 
         if f is not None and not f.on_ground:
             sector = sector_of(f)
             if not _is_plausible_sector(sector):
                 sector = None
             source = "live"
-            if not sector and reg in hub_schedule:
-                candidate = hub_schedule[reg]["sector"]
+            if not sector and board:
+                candidate = board["sector"]
                 if _is_plausible_sector(candidate):
                     sector = candidate
-                    source = "board"
+                    source = "board_provisional" if planned else "board"
             phase = "DESCENDING" if (f.vertical_speed or 0) < -200 else \
                     "CLIMBING" if (f.vertical_speed or 0) > 200 else "CRUISE"
             dest_code = sector.split("-")[1] if sector else None
             orig_code = sector.split("-")[0] if sector else None
-            eta_fields = build_eta_fields(hub_schedule, reg)
+            eta_fields = build_eta_fields(hub_schedule, reg, sector)
             records.append({
                 "registration": reg,
                 "status": "air",
                 "sector": sector,
                 "sector_label": sector_label_of(sector),
                 "sector_source": source if sector else "unknown",
-                "callsign": f.callsign,
+                "callsign": f.callsign or (board.get("callsign") if sector else None),
                 "altitude_ft": f.altitude,
                 "ground_speed_kt": f.ground_speed,
                 "vertical_speed_fpm": f.vertical_speed,
@@ -821,36 +1000,50 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             sector = None
         ground_speed = f.ground_speed if f is not None else None
         is_taxiing = bool(f is not None and ground_speed is not None and ground_speed > TAXI_SPEED_KT)
+        # Airport this board information says the aircraft is standing at
+        # (see the branches below) -- prefer it over inferring a location
+        # from the sector's shape.
+        board_at = None
 
         if sector:
             source = "live"
             note = f"Taxiing at {ground_speed} kt (callsign {f.callsign or '-'})" if is_taxiing \
                 else f"On ground, flight plan active (callsign {f.callsign or '-'})"
-        elif reg in hub_schedule and _is_plausible_sector(hub_schedule[reg]["sector"]):
-            sector = hub_schedule[reg]["sector"]
+        elif last_done and _is_plausible_sector(last_done["sector"]):
+            # Board knows the flight this aircraft just landed from, and
+            # where that put it. A parked aircraft is at the destination
+            # of the flight it last completed -- that is the sector to
+            # show, not a future rotation it hasn't started yet.
+            sector = last_done["sector"]
             source = "board"
-            note = hub_schedule[reg]["status"]
+            board_at = last_done.get("at_airport")
+            note = last_done.get("status") or "On ground"
         elif reg in cache and _cache_entry_is_fresh(cache[reg]) and _is_plausible_sector(cache[reg]["sector"]):
+            # We personally watched this one flying this sector recently;
+            # that is evidence, and it outranks a future rotation that
+            # may still be reassigned to another airframe.
             sector = cache[reg]["sector"]
             source = "cache"
             note = f"Last seen on this sector at {cache[reg]['updated']}"
+            # Which airport we last observed it parked at, if we have that.
+            board_at = _current_airport_for_ground(
+                sector, "cache", note, cache_entry=cache[reg])
+        elif board and _is_plausible_sector(board.get("sector")):
+            # Nothing completed or recently observed is known, but the
+            # board does show this aircraft on a flight: its next
+            # rotation, and (being the origin side of that flight) the
+            # airport it is parked at. Shown at reduced confidence and
+            # labelled as such -- "nothing at all" is the worse answer.
+            sector = board["sector"]
+            source = "board_provisional" if planned else "board"
+            board_at = sector.split("-")[0]
+            note = board.get("status")
         else:
             sector = None
             source = "unknown"
             note = "No sector data yet"
 
-        # Distinguish "we know it hasn't landed" (timing exists, no real
-        # arrival yet -> trust that) from "we have no timing data at all"
-        # (timing missing entirely -> has_landed=None, so the function
-        # falls back to the text-based check instead of wrongly assuming
-        # not-landed when the status text might still say otherwise).
-        board_timing = hub_schedule.get(reg, {}).get("timing") if source == "board" else None
-        has_landed = bool(board_timing.get("real_arrival_ts")) if board_timing is not None else None
-
-        current_code = _current_airport_for_ground(
-            sector, source, note, has_landed=has_landed,
-            cache_entry=cache.get(reg) if source == "cache" else None,
-        )
+        current_code = board_at or _current_airport_for_ground(sector, source, note)
         # A live GPS fix beats every inference above: the airport the
         # aircraft is physically at IS where it is, whatever the flight
         # plan on its transponder (often the flight it just finished)
@@ -860,7 +1053,7 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             gps_airport = nearest_airport(f.latitude, f.longitude)
             if gps_airport:
                 current_code = gps_airport
-        eta_fields = build_eta_fields(hub_schedule, reg)
+        eta_fields = build_eta_fields(hub_schedule, reg, sector)
 
         # When this aircraft arrived, from the tracker's own record (see
         # update_ground_since). Unknown stays unknown -- it is never
@@ -893,7 +1086,8 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             "sector": sector,
             "sector_label": sector_label_of(sector),
             "sector_source": source,
-            "callsign": f.callsign if f is not None else None,
+            "callsign": (f.callsign if f is not None else None)
+                        or (board.get("callsign") if sector else None),
             "altitude_ft": None,
             "ground_speed_kt": ground_speed,
             "vertical_speed_fpm": None,

@@ -110,6 +110,43 @@ def save_state_snapshot(state):
 _hub_schedule_lock = threading.Lock()
 _hub_schedule = {}  # shared between the two loops; slow loop writes, fast loop reads
 
+# ----------------------------------------------------------------------
+# Rate-limit backoff
+# ----------------------------------------------------------------------
+# FlightRadar24 answers "HTTP 429" once too many requests arrive from one
+# address, and it stays unhappy for a while. Retrying at the normal
+# cadence during that window is both pointless and actively harmful: it
+# keeps the block alive, and the fleet list then updates with nothing at
+# all (every aircraft classified "unknown") instead of continuing to show
+# the last data that did arrive. So on a rate-limit answer both loops
+# pause for a cooldown and keep serving the previous snapshot.
+#
+# The state files the app reads are untouched during a cooldown, so the
+# board-derived sectors/locations already found stay on screen.
+RATE_LIMIT_COOLDOWN_SEC = 120
+_ratelimit_lock = threading.Lock()
+_ratelimit_until = 0.0
+
+
+def _is_rate_limited(exc):
+    text = str(exc).lower()
+    return "429" in text or "too many requests" in text
+
+
+def _start_ratelimit_cooldown(where, exc):
+    """Pauses both loops after a 429, returning how long we waited."""
+    global _ratelimit_until
+    with _ratelimit_lock:
+        _ratelimit_until = time.time() + RATE_LIMIT_COOLDOWN_SEC
+    print(f"[rate limited] {where}: {exc} -- pausing polls for "
+          f"{RATE_LIMIT_COOLDOWN_SEC}s and continuing to serve the last good data")
+    return RATE_LIMIT_COOLDOWN_SEC
+
+
+def _cooldown_remaining():
+    with _ratelimit_lock:
+        return max(0.0, _ratelimit_until - time.time())
+
 
 def _slow_loop(fr):
     """Refreshes airport schedule-board data (sector/ETA/delay) at the
@@ -117,28 +154,47 @@ def _slow_loop(fr):
     doesn't need to be fresh every few seconds."""
     global _hub_schedule
     while True:
+        waited = 0
+        if _cooldown_remaining() > 0:
+            time.sleep(min(_cooldown_remaining(), SLOW_POLL_SECONDS))
+            continue
         try:
             new_schedule = core.fetch_hub_schedule(fr)
             with _hub_schedule_lock:
                 _hub_schedule = new_schedule
             print(f"[schedule board] refreshed -- {len(new_schedule)} aircraft matched")
         except Exception as e:
-            print(f"[schedule board fetch failed] {e}")
-        time.sleep(SLOW_POLL_SECONDS)
+            if _is_rate_limited(e):
+                waited = _start_ratelimit_cooldown("schedule board", e)
+            else:
+                print(f"[schedule board fetch failed] {e}")
+        time.sleep(max(SLOW_POLL_SECONDS, waited))
 
 
 def _fast_loop():
     """Refreshes live positions (the part that needs to feel real-time)
     at the fast cadence, using whatever airport-schedule snapshot the
-    slow loop most recently produced."""
+    slow loop most recently produced.
+
+    Position data is the part FlightRadar24 throttles hardest, and on a
+    datacentre IP (Render) it can answer HTTP 429 to every query for long
+    stretches. This loop therefore NEVER gives up: a failure leaves the
+    last good fleet list in place, reports why, and retries with a
+    growing gap instead of hammering a block that is already refusing us.
+    """
     fr = FlightRadar24API()
     sector_cache = core.load_sector_cache()
     ground_since = core.load_ground_since()
     prev_air = set()  # aircraft that were airborne on the previous poll
+    failures_in_a_row = 0
 
     threading.Thread(target=_slow_loop, args=(fr,), daemon=True).start()
 
     while True:
+        waited = 0
+        if _cooldown_remaining() > 0:
+            time.sleep(min(_cooldown_remaining(), FAST_POLL_SECONDS))
+            continue
         try:
             by_reg = core.fetch_positions(fr)
             timestamp = core.nepal_now_str()
@@ -176,13 +232,28 @@ def _fast_loop():
 
             save_state_snapshot(snapshot)
 
+            failures_in_a_row = 0
             print(f"[{timestamp}] Updated. {len(air)} airborne, {len(ground)} on ground.")
         except Exception as e:
-            print(f"[poll error] {e}")
+            failures_in_a_row += 1
+            print(f"[poll error] {failures_in_a_row} in a row: {e}")
+            if _is_rate_limited(e):
+                waited = _start_ratelimit_cooldown("live positions", e)
+            # Keep whatever fleet list is already being served (or was
+            # restored from disk at startup) and say why it is not fresh.
+            # Blanking the list here is what turns "FlightRadar24 is
+            # throttling us" into "the whole fleet vanished".
             with _state_lock:
-                _state["error"] = str(e)
+                _state["error"] = (
+                    f"Live position feed unavailable ({e}) -- showing the last known "
+                    f"fleet data, {failures_in_a_row} attempt(s) since it last updated."
+                )
+            # Extra spacing of our own on top of the 429 cooldown, so a
+            # long block is not retried every 10s for hours on end.
+            if failures_in_a_row >= 5:
+                waited = max(waited, min(300, FAST_POLL_SECONDS * failures_in_a_row))
 
-        time.sleep(FAST_POLL_SECONDS)
+        time.sleep(max(FAST_POLL_SECONDS, waited))
 
 
 @app.after_request

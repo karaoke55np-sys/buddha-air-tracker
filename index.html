@@ -2053,8 +2053,12 @@
             document.getElementById('liveApproachCount').textContent = approaching.length;
             document.getElementById('liveTaxiCount').textContent = taxiing.length;
 
+            // When the position feed is down, the cards below are the last
+            // known fleet data rather than a live reading -- say so, and
+            // say when it was actually captured, so an old position is
+            // never mistaken for a current one.
             document.getElementById('liveUpdatedText').textContent = liveData.error
-                ? `Live tracker error: ${liveData.error} (showing last update: ${liveData.updated || 'never'} NPT)`
+                ? `Live tracker: ${liveData.error} (last update ${liveData.updated || 'never'} NPT)`
                 : `Live tracker updated ${liveData.updated || '--'} NPT (Nepal time)`;
 
             renderFilterChips('liveApproachFilters', approaching, 'destination_airport', 'destination_airport_label',
