@@ -551,6 +551,102 @@ origin; and the edge case where timing data is missing entirely still
 correctly falls back to text-matching rather than wrongly assuming
 not-landed.
 
+## Three fixes from your latest review
+
+### 1. Sectors falling into "Unknown" too often
+A far-future pending schedule entry (e.g. a departure scheduled hours
+from now) was being discarded entirely to avoid showing an unconfirmed
+tail as if it were certain — correct instinct, but it meant losing
+useful information rather than just labeling it honestly. Now these are
+kept as a lower-confidence **"provisional"** tier (shown with a
+"(tentative)" note) instead of being thrown away. A confirmed entry can
+never be overwritten by a provisional one for the same aircraft, no
+matter which has a later timestamp — tested directly, including the
+case where a provisional entry's timestamp was *later* than a confirmed
+one, confirming the confirmed entry still correctly wins.
+
+### 2. Data resetting whenever Python errors/restarts
+Two separate gaps, both fixed:
+- **`api_server.py`** now saves its last-known fleet snapshot to disk
+  after every successful update, and reloads it immediately on startup
+  — so a crash or redeploy shows the last real data (clearly marked as
+  "restored, waiting for a fresh update") instead of going blank until
+  the next poll completes. Tested with a simulated restart: confirmed
+  the data and its original timestamp survive correctly.
+- **`server.js`** now automatically restarts the Python sidecar if it
+  crashes, instead of leaving it dead until someone notices. Includes a
+  backoff (5s → up to 60s) if it keeps crashing rapidly, which resets
+  back to 5s once it's run healthily for 30+ seconds. Tested end-to-end
+  with a real process that crashes immediately every time — confirmed
+  genuine, repeated auto-restarts with correctly growing delays.
+
+**Bonus fix found along the way:** every "updated"/"last seen" timestamp
+was using the server's raw system clock, which is UTC on Render — not
+Nepal time. Every displayed timestamp was roughly 5h45m off from a real
+Nepal clock. Fixed with a dedicated Nepal-time helper used consistently
+everywhere a timestamp is generated or compared, verified directly
+against this environment's own UTC system clock to confirm the
+conversion is exactly right.
+
+### 3. Ground/taxi listings sorted by time instead of alphabetically
+Aircraft in the On Ground and Taxiing tabs are now ordered **most
+recently arrived first**, not by registration letters. Each aircraft's
+"last known ground event" time is pulled from the best available
+source — a real landing timestamp from the schedule board when known,
+the live-confirmed "right now" for anything currently broadcasting, or
+the sector-memory cache's own timestamp as a fallback — all compared on
+a true, correctly-computed epoch basis so different sources sort
+correctly against each other. Aircraft with no timing signal at all
+sort to the bottom rather than landing randomly. Tested directly:
+three aircraft landed at different times sort in the correct order, a
+live-confirmed aircraft correctly outranks an older landing, and an
+aircraft with no data at all correctly sorts last.
+
+## Corrections after the first deploy (read this one first)
+The previous round shipped with real defects. They were found by
+reproducing them, not guessed at:
+
+- **Ground location came from guesswork.** A plane that had just
+  landed still carries its old flight plan (PKR->KTM) on its
+  transponder, and the code assumed "origin", so AMD sitting at KTM
+  showed as PKR. Now the aircraft's real GPS position decides which
+  airport it is at (`nearest_airport`, within 15 km). The cache also
+  remembers where an aircraft was last seen on the ground.
+- **Sort order was wrong.** An aircraft waiting at the gate carries a
+  *future* timestamp (its ETA at the destination), so it ranked above
+  one that had just landed. Sorting now uses a real arrival time only:
+  FlightRadar24's landing time when the boards have it, otherwise the
+  moment this tracker watched the aircraft stop being airborne
+  (`update_ground_since`, saved to disk). If neither exists the arrival
+  time is shown as "not known yet" and that aircraft sorts last. It is
+  never invented.
+- **No Nepal time was ever shown.** Timestamps were converted inside
+  but nothing on screen displayed one. Ground and taxi cards now say
+  `Landed 14:35 NPT`; the header, ETA and detail panel are labelled
+  NPT too. Times not from today include the date.
+- **Strictness was loosened wrongly.** Far-future schedule entries were
+  shown as "tentative" sectors, and the board's *predicted* tail was
+  used for the Flight Board aircraft badge. Both are reversed: only
+  confirmed board entries are used, and the badge comes only from an
+  aircraft actually broadcasting that callsign. A guess can no longer
+  appear as fact (this is the ANZ -> AMU swap risk). The cost: more
+  aircraft honestly show Unknown instead of a guess.
+
+### Why data can still look empty or wrong on Render's free plan
+Render's free web service spins down after about 15 minutes with no
+traffic, and its filesystem is wiped on every spin-down, restart and
+deploy. Everything this app remembers (sector cache, arrival times,
+last known state, chat history) lives in files, so on the free plan it
+starts from empty after each cold start and many aircraft show Unknown
+until they are seen again. That is a hosting limit, not something the
+code can work around. To keep data across restarts you need a paid
+instance with a persistent Disk mounted at `/app/data` (render.yaml
+already sets `FLEET_DATA_DIR=/app/data`).
+
+To confirm the new code is actually live, open
+`https://<your-app>.onrender.com/api/fleet-status` and check that
+ground entries contain `ground_since_time`.
+
 ## Deploying to Render
 Three new files handle this: `Dockerfile`, `requirements.txt`, and
 `render.yaml`. The app was already ported to run as one process that

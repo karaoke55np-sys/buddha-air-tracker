@@ -50,6 +50,8 @@ publicly -- this is meant to run on your own PC / local network.
 import threading
 import time
 import datetime
+import json
+import os
 
 from flask import Flask, jsonify
 from FlightRadarAPI import FlightRadar24API
@@ -60,6 +62,13 @@ FAST_POLL_SECONDS = 10   # live position: altitude, speed, heading, air/ground
 SLOW_POLL_SECONDS = 90   # airport schedule boards: sector/ETA/delay data
 PORT = 5051
 CORS_ALLOW_ORIGIN = "*"  # e.g. "http://localhost:3000" to restrict it
+
+# Where the last-known fleet status gets saved, so a crash or restart of
+# this process (whether from an unhandled error, a redeploy, or anything
+# else) doesn't wipe the data the app is showing -- it reloads the last
+# good snapshot immediately on startup instead of going blank, while the
+# background loop works on getting fresh data again.
+STATE_CACHE_FILE = os.path.join(core.DATA_DIR, "buddha_air_live_state.json")
 
 app = Flask(__name__)
 
@@ -72,6 +81,31 @@ _state = {
     "ground": [],
     "error": None,
 }
+
+
+def load_last_known_state():
+    """Reloads the last successfully-saved fleet snapshot at startup, so
+    the API never has to answer with a totally blank payload after a
+    restart. The returned state's own "updated" timestamp stays honest
+    about when that data was actually fetched -- it's not pretended to
+    be fresh."""
+    if os.path.exists(STATE_CACHE_FILE):
+        try:
+            with open(STATE_CACHE_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            saved["error"] = "Restored from last known data after a restart -- waiting for a fresh update."
+            return saved
+        except Exception as e:
+            print(f"[state cache load failed] {e}")
+    return None
+
+
+def save_state_snapshot(state):
+    try:
+        with open(STATE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"[state cache save failed] {e}")
 
 _hub_schedule_lock = threading.Lock()
 _hub_schedule = {}  # shared between the two loops; slow loop writes, fast loop reads
@@ -99,13 +133,15 @@ def _fast_loop():
     slow loop most recently produced."""
     fr = FlightRadar24API()
     sector_cache = core.load_sector_cache()
+    ground_since = core.load_ground_since()
+    prev_air = set()  # aircraft that were airborne on the previous poll
 
     threading.Thread(target=_slow_loop, args=(fr,), daemon=True).start()
 
     while True:
         try:
             by_reg = core.fetch_positions(fr)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = core.nepal_now_str()
 
             with _hub_schedule_lock:
                 hub_schedule = _hub_schedule
@@ -118,9 +154,16 @@ def _fast_loop():
             sector_cache = core.update_sector_cache(sector_cache, by_reg, timestamp)
             core.save_sector_cache(sector_cache)
 
-            records = core.build_fleet_records(by_reg, sector_cache, hub_schedule, timestamp)
+            core.update_ground_since(ground_since, prev_air, by_reg, hub_schedule, time.time())
+            core.save_ground_since(ground_since)
+
+            records = core.build_fleet_records(by_reg, sector_cache, hub_schedule, timestamp, ground_since)
             air = [r for r in records if r["status"] == "air"]
             ground = [r for r in records if r["status"] == "ground"]
+            # Most recently arrived aircraft first (by real arrival time).
+            # Aircraft whose arrival time isn't known sort to the bottom,
+            # and keep a stable order among themselves.
+            ground.sort(key=lambda r: r["sort_ts"] if r.get("sort_ts") is not None else -1, reverse=True)
 
             with _state_lock:
                 _state["updated"] = timestamp
@@ -129,6 +172,9 @@ def _fast_loop():
                 _state["air"] = air
                 _state["ground"] = ground
                 _state["error"] = None
+                snapshot = dict(_state)
+
+            save_state_snapshot(snapshot)
 
             print(f"[{timestamp}] Updated. {len(air)} airborne, {len(ground)} on ground.")
         except Exception as e:
@@ -158,6 +204,12 @@ def health():
 
 
 if __name__ == "__main__":
+    restored = load_last_known_state()
+    if restored:
+        with _state_lock:
+            _state.update(restored)
+        print(f"[state cache] Restored last known snapshot from {restored.get('updated')} -- refreshing now.")
+
     t = threading.Thread(target=_fast_loop, daemon=True)
     t.start()
     print(f"Buddha Air fleet API running on http://localhost:{PORT}/api/fleet-status")

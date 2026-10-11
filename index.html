@@ -327,6 +327,23 @@
         .status-badge.revised { background: rgba(139, 92, 246, 0.15); color: var(--revised); }
         .status-badge.next { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
         .status-badge.departed { background: rgba(59, 130, 246, 0.15); color: var(--primary); }
+
+        .aircraft-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 10px; font-weight: 600; color: var(--text-secondary);
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border-light);
+            border-radius: 20px; padding: 3px 10px;
+        }
+        .aircraft-badge i { color: var(--primary); font-size: 9px; }
+        .aircraft-line { margin: 4px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+
+        .swap-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 10px; font-weight: 600; color: var(--warning);
+            background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 20px; padding: 3px 10px;
+        }
+        .swap-badge i { font-size: 9px; }
         .remarks { background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 8px; margin-bottom: 10px; font-size: 10px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
         .flight-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid var(--border-light); }
         .flight-destination { font-size: 11px; display: flex; align-items: center; gap: 5px; }
@@ -686,6 +703,9 @@
         .aircraft-card .ac-sector .arrow { color: var(--primary); margin: 0 4px; }
         .aircraft-card .ac-metrics { display: flex; gap: 12px; font-size: 11px; color: var(--text-secondary); flex-wrap: wrap; }
         .aircraft-card .ac-metrics span i { margin-right: 4px; color: var(--text-muted); }
+        .aircraft-card .ac-arrival { font-size: 12px; font-weight: 600; color: var(--text-primary, #fff); margin: 2px 0 8px; }
+        .aircraft-card .ac-arrival i { margin-right: 6px; color: var(--primary); }
+        .aircraft-card .ac-arrival.unknown { color: var(--text-muted); font-weight: 400; }
         .aircraft-card .ac-note { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
 
         .aircraft-card .ac-eta { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); flex-wrap: wrap; }
@@ -1210,7 +1230,14 @@
             if (isDeparted) statusClass = 'departed';
             
             const tracked = trackedFlights.has(flight.flightNumber);
-            
+
+            const aircraftBadgeHtml = flight.aircraftRegistration
+                ? `<span class="aircraft-badge" title="${escapeHtml(flight.aircraftStatus || '')}"><i class="fas fa-plane"></i> ${escapeHtml(flight.aircraftRegistration)}</span>`
+                : '';
+            const swapBadgeHtml = flight.aircraftReassigned
+                ? `<span class="swap-badge" title="Aircraft changed on this flight"><i class="fas fa-exchange-alt"></i> was ${escapeHtml(flight.previousAircraftRegistration)}</span>`
+                : '';
+
             if (currentView === 'list') {
                 return `
                     <div class="${cardClass}">
@@ -1221,6 +1248,8 @@
                         <div class="flight-body">
                             <span class="flight-time"><i class="far fa-clock"></i> ${flight.time}</span>
                             <span class="status-badge ${statusClass}">${statusText}</span>
+                            ${aircraftBadgeHtml}
+                            ${swapBadgeHtml}
                         </div>
                         <div class="flight-footer">
                             <button class="alert-btn ${tracked ? 'active' : ''}" onclick="toggleTrackFlight('${flight.flightNumber.replace(/'/g, "\\'")}', this)">
@@ -1241,6 +1270,7 @@
                             <span class="flight-time"><i class="far fa-clock"></i> ${flight.time}</span>
                             <span class="status-badge ${statusClass}">${statusText}</span>
                         </div>
+                        ${aircraftBadgeHtml || swapBadgeHtml ? `<div class="aircraft-line">${aircraftBadgeHtml}${swapBadgeHtml}</div>` : ''}
                         <div class="remarks"><i class="fas fa-info-circle"></i> ${escapeHtml(flight.remarks || 'Scheduled')}</div>
                         <div class="flight-footer">
                             <span class="flight-destination"><i class="fas fa-location-dot"></i> ${escapeHtml(flight.destination)}</span>
@@ -1865,7 +1895,10 @@
         }
 
         function sourceLabel(source) {
-            return { live: 'Live ADS-B', board: 'Airport board', cache: 'Last seen', unknown: 'No data' }[source] || source;
+            return {
+                live: 'Live ADS-B', board: 'Airport board', board_provisional: 'Airport board (tentative)',
+                cache: 'Last seen', unknown: 'No data',
+            }[source] || source;
         }
 
         function delayClass(delayMinutes) {
@@ -1879,7 +1912,7 @@
             if (!r.eta_time && !r.delay_label) return '';
             const parts = [];
             if (r.eta_time) {
-                parts.push(`<span><i class="fas fa-clock"></i>ETA ${r.eta_time}${r.eta_minutes != null ? ` (${r.eta_minutes}m)` : ''}</span>`);
+                parts.push(`<span><i class="fas fa-clock"></i>ETA ${r.eta_time} NPT${r.eta_minutes != null ? ` (${r.eta_minutes}m)` : ''}</span>`);
             }
             if (r.delay_label) {
                 parts.push(`<span class="delay-chip ${delayClass(r.delay_minutes)}">${r.delay_label}</span>`);
@@ -1907,6 +1940,18 @@
                 </div>`;
         }
 
+        // When the aircraft arrived, in Nepal time. If it isn't known it
+        // says so, rather than showing a made-up time.
+        function renderArrivalLine(r) {
+            if (r.ground_since_time) {
+                const how = r.ground_since_source === 'board'
+                    ? 'Landing time recorded by FlightRadar24'
+                    : 'Time this tracker saw it arrive (accurate to about 10 seconds)';
+                return `<div class="ac-arrival" title="${how}"><i class="fas fa-plane-arrival"></i>Landed ${r.ground_since_time} NPT</div>`;
+            }
+            return `<div class="ac-arrival unknown"><i class="fas fa-plane-arrival"></i>Arrival time not known yet</div>`;
+        }
+
         function renderGroundCard(r) {
             return `
                 <div class="aircraft-card" data-reg="${r.registration}">
@@ -1914,6 +1959,7 @@
                         <span class="ac-reg">${r.registration}</span>
                     </div>
                     <div class="ac-sector">${r.sector_label}</div>
+                    ${renderArrivalLine(r)}
                     <div class="ac-note">${r.note || ''}</div>
                     ${renderEtaBlock(r)}
                     <div class="source-tag">${sourceLabel(r.sector_source)}</div>
@@ -1929,6 +1975,7 @@
                     </div>
                     <div class="ac-callsign">${r.callsign || '-'}</div>
                     <div class="ac-sector">${r.sector_label}</div>
+                    ${renderArrivalLine(r)}
                     <div class="ac-metrics">
                         <span><i class="fas fa-tachometer-alt"></i>${r.ground_speed_kt ?? '-'} kt</span>
                     </div>
@@ -2007,8 +2054,8 @@
             document.getElementById('liveTaxiCount').textContent = taxiing.length;
 
             document.getElementById('liveUpdatedText').textContent = liveData.error
-                ? `Live tracker error: ${liveData.error} (showing last update: ${liveData.updated || 'never'})`
-                : `Live tracker updated ${liveData.updated || '--'}`;
+                ? `Live tracker error: ${liveData.error} (showing last update: ${liveData.updated || 'never'} NPT)`
+                : `Live tracker updated ${liveData.updated || '--'} NPT (Nepal time)`;
 
             renderFilterChips('liveApproachFilters', approaching, 'destination_airport', 'destination_airport_label',
                 approachFilter, (code) => { approachFilter = code; });
@@ -2294,6 +2341,7 @@
             } else {
                 if (r.is_taxiing) metrics += metricBlock('fa-tachometer-alt', 'Taxi Speed', `${r.ground_speed_kt ?? '-'} kt`);
                 metrics += metricBlock('fa-map-marker-alt', 'Current Airport', r.current_airport_label);
+                metrics += metricBlock('fa-plane-arrival', 'Landed (Nepal time)', r.ground_since_time ? `${r.ground_since_time} NPT` : 'Not known yet');
             }
             document.getElementById('acModalMetrics').innerHTML = metrics;
 
@@ -2301,7 +2349,7 @@
             document.getElementById('acModalNote').textContent = r.note || '';
             document.getElementById('acModalNote').style.display = r.note ? 'block' : 'none';
             document.getElementById('acModalSource').textContent = sourceLabel(r.sector_source);
-            document.getElementById('acModalUpdated').textContent = `Updated ${r.updated || ''}`;
+            document.getElementById('acModalUpdated').textContent = `Updated ${r.updated || ''} NPT`;
         }
 
         function openAircraftMap(reg) {
