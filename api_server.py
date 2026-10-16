@@ -128,6 +128,12 @@ HISTORY_STEADY_GAP_SEC = 30       # between lookups once caught up
 HISTORY_REFRESH_UNKNOWN_SEC = 10 * 60   # re-check aircraft we still can't place
 HISTORY_REFRESH_KNOWN_SEC = 30 * 60     # re-check aircraft we can place
 HISTORY_AFTER_LANDING_SEC = 3 * 60      # re-check this long after a landing
+# While the live-position feed is blocked (Render), history is the main
+# source, so it is checked much more often:
+HISTORY_FEED_DOWN_GAP_SEC = 6           # between lookups
+HISTORY_IDLE_CHECK_SEC = 5              # how often to look for due aircraft
+HISTORY_FEED_DOWN_ACTIVE_SEC = 2 * 60   # aircraft flying, or not placed yet
+HISTORY_FEED_DOWN_PARKED_SEC = 6 * 60   # aircraft parked with a known sector
 
 # ----------------------------------------------------------------------
 # Rate-limit backoff
@@ -144,7 +150,19 @@ HISTORY_AFTER_LANDING_SEC = 3 * 60      # re-check this long after a landing
 # board-derived sectors/locations already found stay on screen.
 RATE_LIMIT_COOLDOWN_SEC = 120
 _ratelimit_lock = threading.Lock()
-_ratelimit_until = 0.0
+# One pause per kind of lookup. FlightRadar24 limits them separately: on
+# Render the live-position feed is refused almost constantly while the
+# per-aircraft history lookups keep working -- a single shared pause let
+# the blocked feed stop the history lookups too, so sectors filled in
+# very slowly.
+_ratelimit_until = {"feed": 0.0, "board": 0.0, "history": 0.0}
+# When the live-position feed last answered properly.
+_last_feed_ok = [0.0]
+FEED_DOWN_AFTER_SEC = 90
+
+
+def _feed_down():
+    return time.time() - _last_feed_ok[0] > FEED_DOWN_AFTER_SEC
 
 
 def _is_rate_limited(exc):
@@ -152,20 +170,19 @@ def _is_rate_limited(exc):
     return "429" in text or "too many requests" in text
 
 
-def _start_ratelimit_cooldown(where, exc, seconds=None):
-    """Pauses every loop after a 429, returning how long we wait."""
-    global _ratelimit_until
+def _start_ratelimit_cooldown(where, exc, seconds=None, source="feed"):
+    """Pauses one kind of lookup after a 429, returning how long we wait."""
     seconds = seconds or RATE_LIMIT_COOLDOWN_SEC
     with _ratelimit_lock:
-        _ratelimit_until = max(_ratelimit_until, time.time() + seconds)
-    print(f"[rate limited] {where}: {exc} -- pausing all FlightRadar24 requests for "
+        _ratelimit_until[source] = max(_ratelimit_until[source], time.time() + seconds)
+    print(f"[rate limited] {where}: {exc} -- pausing {source} lookups for "
           f"{seconds}s and continuing to serve the last good data")
     return seconds
 
 
-def _cooldown_remaining():
+def _cooldown_remaining(source="feed"):
     with _ratelimit_lock:
-        return max(0.0, _ratelimit_until - time.time())
+        return max(0.0, _ratelimit_until[source] - time.time())
 
 
 def _slow_loop(fr):
@@ -175,8 +192,8 @@ def _slow_loop(fr):
     global _hub_schedule
     while True:
         waited = 0
-        if _cooldown_remaining() > 0:
-            time.sleep(min(_cooldown_remaining(), SLOW_POLL_SECONDS))
+        if _cooldown_remaining("board") > 0:
+            time.sleep(min(_cooldown_remaining("board"), SLOW_POLL_SECONDS))
             continue
         try:
             new_schedule = core.fetch_hub_schedule(fr)
@@ -191,7 +208,7 @@ def _slow_loop(fr):
                 print("[schedule board] came back empty -- keeping the previous board data")
         except Exception as e:
             if _is_rate_limited(e):
-                waited = _start_ratelimit_cooldown("schedule board", e)
+                waited = _start_ratelimit_cooldown("schedule board", e, source="board")
             else:
                 print(f"[schedule board fetch failed] {e}")
         time.sleep(max(SLOW_POLL_SECONDS, waited))
@@ -212,6 +229,22 @@ def _history_candidates():
     with _history_lock:
         hist = dict(_history)
     due = []
+    if _feed_down():
+        # No live positions: history is the only way to see take-offs and
+        # landings, so every aircraft is checked on a short cycle --
+        # flying / unplaced ones every 2 minutes, parked ones every 6.
+        for reg in core.FLEET:
+            h = hist.get(reg)
+            if h is None:
+                due.append((0, 0, reg))
+                continue
+            fetched = h.get("fetched_at") or 0
+            active = reg in airborne or reg in unknown or core.history_live(hist, reg, now)
+            limit = HISTORY_FEED_DOWN_ACTIVE_SEC if active else HISTORY_FEED_DOWN_PARKED_SEC
+            if now - fetched >= limit:
+                due.append((1 if active else 2, fetched, reg))
+        due.sort()
+        return [reg for _, _, reg in due]
     for reg in core.FLEET:
         if reg in airborne:
             continue
@@ -239,12 +272,12 @@ def _history_loop():
     """Looks up one aircraft's flight history at a time -- quickly at
     startup until every parked aircraft has been checked, then gently."""
     while True:
-        if _cooldown_remaining() > 0:
-            time.sleep(min(_cooldown_remaining(), 30))
+        if _cooldown_remaining("history") > 0:
+            time.sleep(min(_cooldown_remaining("history"), 30))
             continue
         todo = _history_candidates()
         if not todo:
-            time.sleep(HISTORY_STEADY_GAP_SEC)
+            time.sleep(HISTORY_IDLE_CHECK_SEC)
             continue
         reg = todo[0]
         catching_up = any(r not in _history for r in todo)
@@ -259,7 +292,7 @@ def _history_loop():
                   f"{ld['sector'] + ' landed ' + core._fmt_nepal_dt(ld['ts']) if ld else 'none found'}")
         except Exception as e:
             if _is_rate_limited(e):
-                _start_ratelimit_cooldown(f"history {reg}", e)
+                _start_ratelimit_cooldown(f"history {reg}", e, seconds=60, source="history")
                 continue
             print(f"[history fetch failed for {reg}] {e}")
             # Don't retry the same aircraft immediately.
@@ -267,7 +300,13 @@ def _history_loop():
                 old = dict(_history.get(reg) or {})
                 old["fetched_at"] = time.time() - HISTORY_REFRESH_UNKNOWN_SEC + 120
                 _history[reg] = old
-        time.sleep(HISTORY_STARTUP_GAP_SEC if catching_up else HISTORY_STEADY_GAP_SEC)
+        if catching_up:
+            gap = HISTORY_STARTUP_GAP_SEC
+        elif _feed_down():
+            gap = HISTORY_FEED_DOWN_GAP_SEC
+        else:
+            gap = HISTORY_STEADY_GAP_SEC
+        time.sleep(gap)
 
 
 def _fast_loop():
@@ -305,13 +344,46 @@ def _fast_loop():
 
     while True:
         waited = 0
-        if _cooldown_remaining() > 0:
-            time.sleep(min(_cooldown_remaining(), FAST_POLL_SECONDS))
-            continue
-        try:
-            by_reg, sweep_ok, rate_limited = core.fetch_positions_ex(fr)
-            now_ts = time.time()
+        now_ts = time.time()
+        by_reg, sweep_ok = {}, False
+        feed_problem = None
 
+        # 1. Live positions -- skipped while FlightRadar24 has us paused.
+        if _cooldown_remaining("feed") > 0:
+            feed_problem = "paused after FlightRadar24 refused requests"
+        else:
+            try:
+                by_reg, sweep_ok, rate_limited = core.fetch_positions_ex(fr)
+                now_ts = time.time()
+                failures_in_a_row = 0
+                if sweep_ok:
+                    _last_feed_ok[0] = now_ts
+                if rate_limited:
+                    # Even one refused query means we're going too fast:
+                    # back off (20s, 40s, 80s, then 120s).
+                    limited_in_a_row += 1
+                    _start_ratelimit_cooldown(
+                        "live positions (some queries refused)", "HTTP 429",
+                        seconds=min(RATE_LIMIT_COOLDOWN_SEC, 20 * 2 ** (limited_in_a_row - 1)))
+                else:
+                    limited_in_a_row = 0
+            except Exception as e:
+                failures_in_a_row += 1
+                feed_problem = str(e)
+                print(f"[poll error] {failures_in_a_row} in a row: {e}")
+                if _is_rate_limited(e):
+                    limited_in_a_row += 1
+                    _start_ratelimit_cooldown(
+                        "live positions", e,
+                        seconds=min(RATE_LIMIT_COOLDOWN_SEC, 20 * 2 ** (limited_in_a_row - 1)))
+                elif failures_in_a_row >= 5:
+                    waited = min(300, FAST_POLL_SECONDS * failures_in_a_row)
+
+        # 2. Rebuild the fleet picture EVERY cycle -- even with no live
+        # positions -- so sectors and take-offs/landings found by the
+        # history lookups reach the screen straight away instead of
+        # waiting for the blocked feed to come back.
+        try:
             for reg, f in by_reg.items():
                 if f.on_ground:
                     last_ground[reg] = (f, now_ts)
@@ -323,16 +395,6 @@ def _fast_loop():
                 elif now_ts - seen > GROUND_MEMO_SEC:
                     last_ground.pop(reg, None)
 
-            if rate_limited:
-                # Even one refused query means we're going too fast: back
-                # off (20s, 40s, 80s, then 120s) instead of carrying on at
-                # full speed and keeping the block alive.
-                limited_in_a_row += 1
-                waited = _start_ratelimit_cooldown(
-                    "live positions (some queries refused)", "HTTP 429",
-                    seconds=min(RATE_LIMIT_COOLDOWN_SEC, 20 * 2 ** (limited_in_a_row - 1)))
-            else:
-                limited_in_a_row = 0
             timestamp = core.nepal_now_str()
 
             # Keep missing-but-airborne aircraft in the air; decide which
@@ -345,10 +407,8 @@ def _fast_loop():
             with _history_lock:
                 history = dict(_history)
 
-            # Only the handful of airborne aircraft still missing a
-            # sector after the board lookup need this per-flight call,
-            # so it stays cheap enough for the fast loop.
-            core.resolve_missing_sectors_via_details(fr, by_reg, hub_schedule)
+            if by_reg and _cooldown_remaining("feed") == 0:
+                core.resolve_missing_sectors_via_details(fr, by_reg, hub_schedule)
 
             sector_cache = core.update_sector_cache(sector_cache, by_reg, timestamp)
             core.save_sector_cache(sector_cache)
@@ -362,13 +422,16 @@ def _fast_loop():
             air = [r for r in records if r["status"] == "air"]
             ground = [r for r in records if r["status"] == "ground"]
             # Most recently arrived aircraft first (by real arrival time).
-            # Aircraft whose arrival time isn't known sort to the bottom,
-            # and keep a stable order among themselves.
             ground.sort(key=lambda r: r["sort_ts"] if r.get("sort_ts") is not None else -1, reverse=True)
 
             held = [r["registration"] for r in air if r.get("signal_lost")]
+            from_hist = [r["registration"] for r in air if r.get("position_unknown")]
             notice = None
-            if not sweep_ok:
+            if _feed_down():
+                notice = ("Live positions unavailable (FlightRadar24 is limiting this server) -- "
+                          "air/ground and sectors come from each aircraft's flight history; "
+                          "altitude and map position may be missing.")
+            elif not sweep_ok:
                 notice = "En-route feed did not answer this cycle -- airborne aircraft shown from their last sighting."
             elif held:
                 notice = f"Signal briefly lost for {', '.join(held)} -- shown from last sighting."
@@ -384,28 +447,11 @@ def _fast_loop():
                 snapshot = dict(_state)
 
             save_state_snapshot(snapshot)
-
-            failures_in_a_row = 0
-            print(f"[{timestamp}] Updated. {len(air)} airborne ({len(held)} held), "
-                  f"{len(ground)} on ground. sweep_ok={sweep_ok}")
+            print(f"[{timestamp}] Updated. {len(air)} airborne ({len(held)} held, "
+                  f"{len(from_hist)} from history), {len(ground)} on ground. "
+                  f"feed={'ok' if sweep_ok else (feed_problem or 'incomplete')}")
         except Exception as e:
-            failures_in_a_row += 1
-            print(f"[poll error] {failures_in_a_row} in a row: {e}")
-            if _is_rate_limited(e):
-                waited = _start_ratelimit_cooldown("live positions", e)
-            # Keep whatever fleet list is already being served (or was
-            # restored from disk at startup) and say why it is not fresh.
-            # Blanking the list here is what turns "FlightRadar24 is
-            # throttling us" into "the whole fleet vanished".
-            with _state_lock:
-                _state["error"] = (
-                    f"Live position feed unavailable ({e}) -- showing the last known "
-                    f"fleet data, {failures_in_a_row} attempt(s) since it last updated."
-                )
-            # Extra spacing of our own on top of the 429 cooldown, so a
-            # long block is not retried every 10s for hours on end.
-            if failures_in_a_row >= 5:
-                waited = max(waited, min(300, FAST_POLL_SECONDS * failures_in_a_row))
+            print(f"[rebuild error] {e}")
 
         time.sleep(max(FAST_POLL_SECONDS, waited))
 

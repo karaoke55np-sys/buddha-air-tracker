@@ -1927,10 +1927,11 @@
                 <div class="${cls}" data-reg="${r.registration}">
                     <div class="ac-top">
                         <span class="ac-reg">${r.registration}</span>
-                        <span class="phase-badge ${r.phase}">${r.phase}</span>
+                        <span class="phase-badge ${r.phase === 'AIRBORNE' ? 'CRUISE' : r.phase}">${r.phase}</span>
                     </div>
                     <div class="ac-callsign">${r.callsign || '-'}</div>
                     <div class="ac-sector">${r.sector_label}</div>
+                    ${r.position_unknown ? `<div class="ac-arrival unknown" title="Live position feed unavailable on this server. In the air according to the aircraft's flight history."><i class="fas fa-plane-departure"></i>Departed ${r.departed_time || '?'} NPT -- live position unavailable</div>` : ''}
                     ${r.signal_lost ? `<div class="ac-arrival unknown" title="Not in the live feed right now (often terrain blocking the signal). Showing its last real position."><i class="fas fa-satellite-dish"></i>Signal lost -- last seen ${r.last_seen_time || '?'} NPT</div>` : ''}
                     <div class="ac-metrics">
                         <span><i class="fas fa-arrow-up"></i>${r.altitude_ft ?? '-'} ft</span>

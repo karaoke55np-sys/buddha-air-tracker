@@ -666,7 +666,11 @@ def parse_aircraft_history(raw, now_ts=None):
                              "ts_exact": ts_exact}
         elif dep_real and not landed_ts:
             if live is None or dep_real > live["ts"]:
-                live = {"sector": sector, "status": status, "callsign": callsign, "ts": dep_real}
+                eta = (_dig(row, "time", "estimated", "arrival")
+                       or _dig(row, "time", "other", "eta")
+                       or _dig(row, "time", "scheduled", "arrival"))
+                live = {"sector": sector, "status": status, "callsign": callsign, "ts": dep_real,
+                        "eta_ts": eta if (eta and dep_real < eta < dep_real + STALE_DEPARTURE_SEC) else None}
         elif not dep_real and dep_sched and dep_sched >= now_ts - 3 * 3600:
             if nxt is None or dep_sched < nxt["ts"]:
                 nxt = {"sector": sector, "status": status or "Scheduled",
@@ -724,6 +728,27 @@ def history_last_done(history, reg, now_ts=None):
     if ld and ld.get("ts") and now_ts - HISTORY_MAX_AGE_SEC <= ld["ts"] <= now_ts + 300:
         return ld
     return None
+
+
+HISTORY_LIVE_MAX_AGE_SEC = 15 * 60   # how fresh a history lookup must be to say "airborne"
+
+
+def history_live(history, reg, now_ts=None):
+    """The flight this aircraft is flying right now according to its
+    history (departed, not landed), if that history is fresh. Lets the
+    app show who is in the air even when the live position feed is
+    blocked -- as on Render, where FlightRadar24 refuses position queries
+    but still answers history lookups."""
+    now_ts = now_ts or datetime.datetime.now().timestamp()
+    h = (history or {}).get(reg) or {}
+    lv = h.get("live")
+    if not lv or not lv.get("ts"):
+        return None
+    if now_ts - (h.get("fetched_at") or 0) > HISTORY_LIVE_MAX_AGE_SEC:
+        return None
+    if not (now_ts - STALE_DEPARTURE_SEC <= lv["ts"] <= now_ts + 300):
+        return None
+    return lv
 
 
 def load_hub_schedule():
@@ -1436,6 +1461,53 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
         board = hub_schedule.get(reg) or {}
         board_done = board.get("last_done") or None
         hist_done = history_last_done(history, reg)
+
+        if f is None:
+            lv = history_live(history, reg)
+            gs_ts = (ground_since.get(reg) or {}).get("ts") or 0
+            done_ts = max(gs_ts, (board_done or {}).get("ts") or 0, (hist_done or {}).get("ts") or 0)
+            if lv and lv["ts"] > done_ts and _is_plausible_sector(lv["sector"]):
+                o_code, d_code = lv["sector"].split("-")
+                eta_ts = lv.get("eta_ts")
+                now_s = datetime.datetime.now().timestamp()
+                records.append({
+                    "registration": reg,
+                    "status": "air",
+                    "signal_lost": False,
+                    "signal_lost_seconds": None,
+                    "last_seen_time": None,
+                    # No live position: the feed is unavailable and this
+                    # comes from the aircraft's flight history.
+                    "position_unknown": True,
+                    "departed_time": _fmt_nepal_dt(lv["ts"]),
+                    "sector": lv["sector"],
+                    "sector_label": sector_label_of(lv["sector"]),
+                    "sector_source": "history",
+                    "callsign": lv.get("callsign"),
+                    "altitude_ft": None,
+                    "ground_speed_kt": None,
+                    "vertical_speed_fpm": None,
+                    "phase": "AIRBORNE",
+                    "is_taxiing": False,
+                    "note": None,
+                    "destination_airport": d_code,
+                    "destination_airport_label": airport_label(d_code),
+                    "current_airport": None,
+                    "current_airport_label": None,
+                    "position": None,
+                    "position_is_live": False,
+                    "heading": None,
+                    "origin_coords": airport_coords(o_code),
+                    "destination_coords": airport_coords(d_code),
+                    "sort_ts": now_s,
+                    "eta_time": _fmt_local_time(eta_ts),
+                    "eta_minutes": max(0, round((eta_ts - now_s) / 60)) if eta_ts else None,
+                    "scheduled_arrival_time": None,
+                    "delay_minutes": None,
+                    "delay_label": None,
+                    "updated": timestamp,
+                })
+                continue
         # An imminent next flight takes over from the completed one, so
         # the card describes what this aircraft is doing now rather than
         # a landing from hours ago.
