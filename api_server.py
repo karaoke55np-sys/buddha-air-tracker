@@ -80,6 +80,10 @@ _state = {
     "air": [],
     "ground": [],
     "error": None,
+    # Softer than "error": the data IS fresh, but part of the feed was
+    # missing this cycle, so some airborne aircraft are shown from their
+    # last sighting (flagged per-aircraft with "signal_lost").
+    "notice": None,
 }
 
 
@@ -94,6 +98,7 @@ def load_last_known_state():
             with open(STATE_CACHE_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             saved["error"] = "Restored from last known data after a restart -- waiting for a fresh update."
+            saved.setdefault("notice", None)
             return saved
         except Exception as e:
             print(f"[state cache load failed] {e}")
@@ -102,13 +107,16 @@ def load_last_known_state():
 
 def save_state_snapshot(state):
     try:
-        with open(STATE_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f)
+        core._atomic_write_json(STATE_CACHE_FILE, state)
     except Exception as e:
         print(f"[state cache save failed] {e}")
 
 _hub_schedule_lock = threading.Lock()
-_hub_schedule = {}  # shared between the two loops; slow loop writes, fast loop reads
+# Shared between the two loops; slow loop writes, fast loop reads.
+# Starts from the last snapshot saved to disk (if recent), so a restart
+# doesn't drop every board-derived sector to "Unknown" while the first
+# slow poll is still running.
+_hub_schedule = core.load_hub_schedule()
 
 # ----------------------------------------------------------------------
 # Rate-limit backoff
@@ -160,9 +168,15 @@ def _slow_loop(fr):
             continue
         try:
             new_schedule = core.fetch_hub_schedule(fr)
-            with _hub_schedule_lock:
-                _hub_schedule = new_schedule
-            print(f"[schedule board] refreshed -- {len(new_schedule)} aircraft matched")
+            if new_schedule or not _hub_schedule:
+                with _hub_schedule_lock:
+                    _hub_schedule = new_schedule
+                core.save_hub_schedule(new_schedule)
+                print(f"[schedule board] refreshed -- {len(new_schedule)} aircraft matched")
+            else:
+                # An empty answer while we already hold data is almost
+                # always a failed/throttled fetch, not "no flights today".
+                print("[schedule board] came back empty -- keeping the previous board data")
         except Exception as e:
             if _is_rate_limited(e):
                 waited = _start_ratelimit_cooldown("schedule board", e)
@@ -181,11 +195,18 @@ def _fast_loop():
     stretches. This loop therefore NEVER gives up: a failure leaves the
     last good fleet list in place, reports why, and retries with a
     growing gap instead of hammering a block that is already refusing us.
+
+    An airborne aircraft that is merely MISSING from one poll is held in
+    the air (core.AirHold) instead of being moved to the ground list --
+    that was what emptied "In the Air" / "Taxiing" into "On Ground".
     """
     fr = FlightRadar24API()
     sector_cache = core.load_sector_cache()
     ground_since = core.load_ground_since()
-    prev_air = set()  # aircraft that were airborne on the previous poll
+    air_hold = core.AirHold.load()
+    # Aircraft that were airborne on the previous poll -- restored from
+    # the air-hold file, so a restart doesn't forget who was flying.
+    prev_air = air_hold.airborne_regs()
     failures_in_a_row = 0
 
     threading.Thread(target=_slow_loop, args=(fr,), daemon=True).start()
@@ -196,8 +217,14 @@ def _fast_loop():
             time.sleep(min(_cooldown_remaining(), FAST_POLL_SECONDS))
             continue
         try:
-            by_reg = core.fetch_positions(fr)
+            by_reg, sweep_ok = core.fetch_positions_ex(fr)
+            now_ts = time.time()
             timestamp = core.nepal_now_str()
+
+            # Keep missing-but-airborne aircraft in the air; decide which
+            # of them really landed out of sight.
+            inferred_landings = air_hold.apply(by_reg, sweep_ok, now_ts)
+            air_hold.save()
 
             with _hub_schedule_lock:
                 hub_schedule = _hub_schedule
@@ -210,7 +237,8 @@ def _fast_loop():
             sector_cache = core.update_sector_cache(sector_cache, by_reg, timestamp)
             core.save_sector_cache(sector_cache)
 
-            core.update_ground_since(ground_since, prev_air, by_reg, hub_schedule, time.time())
+            core.update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts,
+                                     inferred_landings)
             core.save_ground_since(ground_since)
 
             records = core.build_fleet_records(by_reg, sector_cache, hub_schedule, timestamp, ground_since)
@@ -221,6 +249,13 @@ def _fast_loop():
             # and keep a stable order among themselves.
             ground.sort(key=lambda r: r["sort_ts"] if r.get("sort_ts") is not None else -1, reverse=True)
 
+            held = [r["registration"] for r in air if r.get("signal_lost")]
+            notice = None
+            if not sweep_ok:
+                notice = "En-route feed did not answer this cycle -- airborne aircraft shown from their last sighting."
+            elif held:
+                notice = f"Signal briefly lost for {', '.join(held)} -- shown from last sighting."
+
             with _state_lock:
                 _state["updated"] = timestamp
                 _state["counts"] = {"air": len(air), "ground": len(ground)}
@@ -228,12 +263,14 @@ def _fast_loop():
                 _state["air"] = air
                 _state["ground"] = ground
                 _state["error"] = None
+                _state["notice"] = notice
                 snapshot = dict(_state)
 
             save_state_snapshot(snapshot)
 
             failures_in_a_row = 0
-            print(f"[{timestamp}] Updated. {len(air)} airborne, {len(ground)} on ground.")
+            print(f"[{timestamp}] Updated. {len(air)} airborne ({len(held)} held), "
+                  f"{len(ground)} on ground. sweep_ok={sweep_ok}")
         except Exception as e:
             failures_in_a_row += 1
             print(f"[poll error] {failures_in_a_row} in a row: {e}")
@@ -254,6 +291,16 @@ def _fast_loop():
                 waited = max(waited, min(300, FAST_POLL_SECONDS * failures_in_a_row))
 
         time.sleep(max(FAST_POLL_SECONDS, waited))
+
+
+def _watchdog(thread):
+    """If the polling thread ever dies, the API would keep answering with
+    frozen data forever. Exit instead, so server.js restarts us cleanly."""
+    while True:
+        time.sleep(15)
+        if not thread.is_alive():
+            print("[watchdog] polling thread stopped -- exiting so the app restarts it")
+            os._exit(1)
 
 
 @app.after_request
@@ -283,6 +330,7 @@ if __name__ == "__main__":
 
     t = threading.Thread(target=_fast_loop, daemon=True)
     t.start()
+    threading.Thread(target=_watchdog, args=(t,), daemon=True).start()
     print(f"Buddha Air fleet API running on http://localhost:{PORT}/api/fleet-status")
     print(f"Fast (position) poll: every {FAST_POLL_SECONDS}s -- Slow (schedule board) poll: every {SLOW_POLL_SECONDS}s")
     app.run(host="0.0.0.0", port=PORT)

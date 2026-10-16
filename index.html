@@ -1930,6 +1930,7 @@
                     </div>
                     <div class="ac-callsign">${r.callsign || '-'}</div>
                     <div class="ac-sector">${r.sector_label}</div>
+                    ${r.signal_lost ? `<div class="ac-arrival unknown" title="Not in the live feed right now (often terrain blocking the signal). Showing its last real position."><i class="fas fa-satellite-dish"></i>Signal lost -- last seen ${r.last_seen_time || '?'} NPT</div>` : ''}
                     <div class="ac-metrics">
                         <span><i class="fas fa-arrow-up"></i>${r.altitude_ft ?? '-'} ft</span>
                         <span><i class="fas fa-tachometer-alt"></i>${r.ground_speed_kt ?? '-'} kt</span>
@@ -1946,6 +1947,8 @@
             if (r.ground_since_time) {
                 const how = r.ground_since_source === 'board'
                     ? 'Landing time recorded by FlightRadar24'
+                    : r.ground_since_source === 'inferred'
+                    ? 'Last seen descending near this airport just before it left the feed (accurate to about a minute)'
                     : 'Time this tracker saw it arrive (accurate to about 10 seconds)';
                 return `<div class="ac-arrival" title="${how}"><i class="fas fa-plane-arrival"></i>Landed ${r.ground_since_time} NPT</div>`;
             }
@@ -2059,7 +2062,8 @@
             // never mistaken for a current one.
             document.getElementById('liveUpdatedText').textContent = liveData.error
                 ? `Live tracker: ${liveData.error} (last update ${liveData.updated || 'never'} NPT)`
-                : `Live tracker updated ${liveData.updated || '--'} NPT (Nepal time)`;
+                : `Live tracker updated ${liveData.updated || '--'} NPT (Nepal time)` +
+                  (liveData.notice ? ` -- ${liveData.notice}` : '');
 
             renderFilterChips('liveApproachFilters', approaching, 'destination_airport', 'destination_airport_label',
                 approachFilter, (code) => { approachFilter = code; });
@@ -2105,7 +2109,16 @@
         async function fetchLiveTracker() {
             try {
                 const res = await fetch(LIVE_API_URL);
-                liveData = await res.json();
+                const fresh = await res.json();
+                const freshHasData = fresh && Array.isArray(fresh.records) && fresh.records.length > 0;
+                const oldHasData = liveData && Array.isArray(liveData.records) && liveData.records.length > 0;
+                if (freshHasData || !oldHasData) {
+                    liveData = fresh;
+                } else {
+                    // An empty answer (tracker restarting / unreachable)
+                    // must never wipe the fleet already on screen.
+                    liveData.error = fresh.error || 'Live tracker returned no data';
+                }
             } catch (e) {
                 liveData = liveData || {};
                 liveData.error = 'Could not reach live tracker API';

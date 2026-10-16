@@ -69,11 +69,46 @@ AIRPORT_ALL_COORDS = {
     "CCU": (22.6547, 88.4467),   # Kolkata, India
 }
 
-# Center point + radius (km) for the wide-area sweep that catches
-# aircraft actually en route between cities.
+# Box for the en-route sweep that catches aircraft flying between cities:
+# all of Nepal plus the Varanasi / Kolkata corridors, and nothing more.
+#
+# This used to be a 900 km "radius" around Kathmandu, which
+# get_bounds_by_point actually turns into an 1,800 km-wide SQUARE --
+# Delhi, Lucknow, Kolkata, Dhaka and half of Tibet. FlightRadar24 only
+# returns a limited number of aircraft per query, so in a box that busy
+# Buddha Air flights were randomly cut from the answer, and every one cut
+# was then shown "On Ground". A tight box keeps the answer small enough
+# to come back complete.
+#   format: north, south, west, east (degrees)
+SWEEP_BOUNDS = (30.7, 22.3, 79.8, 88.9)
+
+# Kept only for anything else that still imports them.
 CENTER_LAT = 27.7
 CENTER_LON = 85.3
 RADIUS_KM = 900
+
+# ----------------------------------------------------------------------
+# Holding airborne aircraft through gaps in the feed
+# ----------------------------------------------------------------------
+# An airborne aircraft can be missing from one poll for reasons that have
+# nothing to do with landing: a mountain blocks its ADS-B signal, a query
+# was rate-limited, or the feed answered incompletely. "Missing" must not
+# mean "landed". Instead the last airborne sighting is kept (clearly
+# flagged as not live) until one of these is true:
+#   - it is seen again (air or ground) -> live data takes over;
+#   - it was last seen low and descending near an airport, and has now
+#     been absent from AIR_LANDED_MISSING_POLLS complete sweeps -> it
+#     landed there (time = when it was last seen, which is accurate to
+#     a poll or two);
+#   - AIR_HOLD_MAX_SEC passed without a sighting -> we honestly don't
+#     know, it drops to the ground list with no invented landing time.
+AIR_HOLD_MAX_SEC = 20 * 60
+AIR_LANDED_MISSING_POLLS = 3
+LANDING_GUESS_MAX_ALT_FT = 8000
+LANDING_GUESS_RADIUS_KM = 25
+AIR_HOLD_FILE_NAME = "buddha_air_air_hold.json"
+HUB_SCHEDULE_FILE_NAME = "buddha_air_hub_schedule.json"
+HUB_SCHEDULE_MAX_AGE_SEC = 45 * 60
 
 # Where things get written on disk (shared between tracker.py and
 # api_server.py so they see the same cache).
@@ -90,6 +125,18 @@ else:
 os.makedirs(DATA_DIR, exist_ok=True)
 SECTOR_CACHE_FILE = os.path.join(DATA_DIR, "buddha_air_sector_cache.json")
 SCHEDULE_DEBUG_FILE = os.path.join(DATA_DIR, "buddha_air_schedule_debug.json")
+AIR_HOLD_FILE = os.path.join(DATA_DIR, AIR_HOLD_FILE_NAME)
+HUB_SCHEDULE_FILE = os.path.join(DATA_DIR, HUB_SCHEDULE_FILE_NAME)
+
+
+def _atomic_write_json(path, data, **kw):
+    """Write JSON via a temp file + rename, so a crash mid-write can never
+    leave a half-written (unreadable) file behind -- an unreadable cache
+    on restart is one way the whole picture used to start from zero."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, **kw)
+    os.replace(tmp, path)
 
 # Altitude (ft) below which + descending we treat as "approaching landing"
 DESCENT_ALT_THRESHOLD = 8000
@@ -232,8 +279,7 @@ def load_sector_cache():
 
 def save_sector_cache(cache):
     try:
-        with open(SECTOR_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2)
+        _atomic_write_json(SECTOR_CACHE_FILE, cache, indent=2)
     except Exception as e:
         print(f"[cache save failed] {e}")
 
@@ -244,6 +290,8 @@ def update_sector_cache(cache, by_reg, timestamp):
     caches a sector that passes the plausibility check, so a bad reading
     can't get remembered and then served back later as if trustworthy."""
     for reg, f in by_reg.items():
+        if getattr(f, "is_held", False):
+            continue  # not a new sighting -- don't refresh "last seen"
         sector = sector_of(f)
         if sector and _is_plausible_sector(sector):
             cache[reg] = {
@@ -282,29 +330,36 @@ def load_ground_since():
 
 def save_ground_since(ground_since):
     try:
-        with open(GROUND_SINCE_FILE, "w", encoding="utf-8") as fh:
-            json.dump(ground_since, fh)
+        _atomic_write_json(GROUND_SINCE_FILE, ground_since)
     except Exception as e:
         print(f"[ground_since save failed] {e}")
 
 
-def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts):
+def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts,
+                        inferred_landings=None):
     """
-    Maintains {registration: {"ts": epoch, "source": "board"|"observed"}}
+    Maintains {registration: {"ts": epoch, "source": "board"|"observed"|"inferred"}}
     -- when each currently-grounded aircraft arrived.
 
-      - Airborne now: it hasn't arrived anywhere; drop any old entry.
-      - Was airborne on the previous poll, isn't now: we watched it
-        arrive -> record this moment ("observed", accurate to one poll).
+      - Airborne now (live, or held through a feed gap): it hasn't
+        arrived anywhere; drop any old entry.
+      - Was airborne on the previous poll and is now SEEN ON THE GROUND:
+        we watched it arrive -> record this moment ("observed").
+      - Was airborne and is now simply MISSING from the feed: that is
+        NOT a landing. Only if the air-hold logic concluded it landed
+        (last seen low and descending near an airport) is a time
+        recorded, and that time is when it was last seen ("inferred").
+        This is what used to stamp fake "Landed HH:MM" times on aircraft
+        that were really still flying, whenever one query failed.
       - Any board entry carrying a real landing time for it: use that
         (FlightRadar24's own touchdown time is more exact than ours),
         unless it's an older landing than the one we already have.
       - Never invented: an aircraft we first meet already on the ground
-        with no board landing simply has no arrival time (shown as
-        unknown, sorted last) rather than a made-up "just now".
+        with no board landing simply has no arrival time.
 
     prev_air is a set owned by the caller, updated in place.
     """
+    inferred_landings = inferred_landings or {}
     for reg in FLEET:
         f = by_reg.get(reg)
         if f is not None and not f.on_ground:
@@ -314,7 +369,14 @@ def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts):
 
         if reg in prev_air:
             prev_air.discard(reg)
-            ground_since[reg] = {"ts": now_ts, "source": "observed"}
+            if f is not None:
+                ground_since[reg] = {"ts": now_ts, "source": "observed"}
+            elif reg in inferred_landings:
+                ground_since[reg] = {"ts": inferred_landings[reg]["ts"], "source": "inferred",
+                                     "airport": inferred_landings[reg].get("airport")}
+        elif f is None and reg in inferred_landings and reg not in ground_since:
+            ground_since[reg] = {"ts": inferred_landings[reg]["ts"], "source": "inferred",
+                                     "airport": inferred_landings[reg].get("airport")}
 
         landing = (hub_schedule.get(reg) or {}).get("last_landing")
         if landing and landing.get("ts") and now_ts - 86400 <= landing["ts"] <= now_ts:
@@ -322,6 +384,150 @@ def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts):
             if cur is None or landing["ts"] >= cur["ts"] - 120:
                 ground_since[reg] = {"ts": landing["ts"], "source": "board"}
     return ground_since
+
+
+# ----------------------------------------------------------------------
+# Air hold: keeps airborne aircraft airborne through feed gaps
+# ----------------------------------------------------------------------
+
+class HeldFlight:
+    """Stand-in for a FlightRadarAPI Flight, built from the last real
+    airborne sighting of an aircraft that is temporarily missing from the
+    feed. Has every attribute the rest of this module reads from a Flight,
+    plus is_held / last_seen_ts so the API can say it isn't live."""
+
+    FIELDS = ("registration", "callsign", "altitude", "ground_speed",
+              "vertical_speed", "heading", "latitude", "longitude",
+              "origin_airport_iata", "destination_airport_iata")
+
+    def __init__(self, snap):
+        for k in self.FIELDS:
+            setattr(self, k, snap.get(k))
+        self.on_ground = False
+        self.is_held = True
+        self.last_seen_ts = snap.get("seen_ts")
+
+
+def _snapshot_of(f, now_ts):
+    snap = {k: getattr(f, k, None) for k in HeldFlight.FIELDS}
+    snap["seen_ts"] = now_ts
+    return snap
+
+
+def _landing_airport_guess(snap):
+    """Airport an aircraft was about to land at when last seen: low,
+    descending (or very slow) and close to a known airport. None if the
+    last sighting doesn't look like the end of a flight."""
+    alt = snap.get("altitude")
+    vs = snap.get("vertical_speed") or 0
+    if alt is None or alt > LANDING_GUESS_MAX_ALT_FT:
+        return None
+    if vs > 200:  # climbing -- just took off, not landing
+        return None
+    return nearest_airport(snap.get("latitude"), snap.get("longitude"),
+                           max_km=LANDING_GUESS_RADIUS_KM)
+
+
+class AirHold:
+    """Remembers the last airborne sighting of every aircraft and decides,
+    when one goes missing, whether to keep showing it in the air, call it
+    landed, or give up. State survives restarts via AIR_HOLD_FILE."""
+
+    def __init__(self):
+        # reg -> {"snap": {...}, "missing_good_polls": int}
+        self.entries = {}
+
+    # -- persistence ------------------------------------------------
+    @classmethod
+    def load(cls):
+        hold = cls()
+        try:
+            with open(AIR_HOLD_FILE, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            now = datetime.datetime.now().timestamp()
+            for reg, e in (data.get("entries") or {}).items():
+                seen = (e.get("snap") or {}).get("seen_ts") or 0
+                if reg in FLEET and now - seen <= AIR_HOLD_MAX_SEC:
+                    hold.entries[reg] = e
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[air hold load failed] {e}")
+        return hold
+
+    def save(self):
+        try:
+            _atomic_write_json(AIR_HOLD_FILE, {"entries": self.entries})
+        except Exception as e:
+            print(f"[air hold save failed] {e}")
+
+    def airborne_regs(self):
+        return set(self.entries.keys())
+
+    # -- per-poll update --------------------------------------------
+    def apply(self, by_reg, sweep_ok, now_ts):
+        """
+        Mutates by_reg in place: aircraft that are missing but still
+        held get a HeldFlight stand-in so they stay in the air.
+        Returns {reg: {"ts": last_seen_ts, "airport": code}} for aircraft
+        judged to have landed while out of sight.
+        """
+        inferred = {}
+        for reg in FLEET:
+            f = by_reg.get(reg)
+            if f is not None:
+                if f.on_ground:
+                    self.entries.pop(reg, None)
+                else:
+                    self.entries[reg] = {"snap": _snapshot_of(f, now_ts), "missing_good_polls": 0}
+                continue
+
+            e = self.entries.get(reg)
+            if e is None:
+                continue
+            snap = e["snap"]
+            if sweep_ok:
+                e["missing_good_polls"] = e.get("missing_good_polls", 0) + 1
+            age = now_ts - (snap.get("seen_ts") or now_ts)
+
+            landed_at = _landing_airport_guess(snap)
+            if landed_at and e["missing_good_polls"] >= AIR_LANDED_MISSING_POLLS:
+                inferred[reg] = {"ts": snap.get("seen_ts") or now_ts, "airport": landed_at}
+                self.entries.pop(reg, None)
+                continue
+            if age > AIR_HOLD_MAX_SEC:
+                self.entries.pop(reg, None)
+                continue
+            by_reg[reg] = HeldFlight(snap)
+        return inferred
+
+
+def load_hub_schedule():
+    """Last schedule-board snapshot saved to disk, if it is recent enough
+    to trust. Without this, every restart left the board data empty until
+    the first slow poll finished, and every sector that came from a board
+    fell to "Unknown" in the meantime."""
+    try:
+        with open(HUB_SCHEDULE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        age = datetime.datetime.now().timestamp() - (data.get("saved_at") or 0)
+        if age <= HUB_SCHEDULE_MAX_AGE_SEC and isinstance(data.get("schedule"), dict):
+            return data["schedule"]
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[hub schedule load failed] {e}")
+    return {}
+
+
+def save_hub_schedule(schedule):
+    try:
+        _atomic_write_json(HUB_SCHEDULE_FILE, {
+            "saved_at": datetime.datetime.now().timestamp(),
+            "schedule": schedule,
+        }, default=str)
+    except Exception as e:
+        print(f"[hub schedule save failed] {e}")
 
 
 # ----------------------------------------------------------------------
@@ -375,7 +581,16 @@ def _is_plausible_sector(sector):
 # ----------------------------------------------------------------------
 
 def fetch_tracked_flights(fr):
+    """Backwards-compatible wrapper: just the {registration: Flight} map."""
+    return fetch_tracked_flights_ex(fr)[0]
+
+
+def fetch_tracked_flights_ex(fr):
     """
+    Returns (by_reg, sweep_ok). sweep_ok is False when the en-route sweep
+    failed this cycle -- in that case an airborne aircraft missing from
+    by_reg says nothing about whether it landed.
+
     Combines several position queries per cycle:
 
     1. A small, zoomed-in query centered on each watched airport
@@ -414,11 +629,14 @@ def fetch_tracked_flights(fr):
             failures.append((f"airport-zoom {code}", e))
             print(f"[airport-zoom fetch failed for {code}] {e}")
 
+    sweep_ok = True
     try:
-        bounds = fr.get_bounds_by_point(CENTER_LAT, CENTER_LON, RADIUS_KM * 1000)
+        n, s_, w, e_ = SWEEP_BOUNDS
+        bounds = f"{n},{s_},{w},{e_}"
         for f in fr.get_flights(bounds=bounds):
             record(f)
     except Exception as e:
+        sweep_ok = False
         failures.append(("wide-area", e))
         print(f"[wide-area fetch failed] {e}")
 
@@ -435,7 +653,7 @@ def fetch_tracked_flights(fr):
         on_ground_sightings = [f for f in flights if f.on_ground]
         by_reg[reg] = on_ground_sightings[0] if on_ground_sightings else flights[0]
 
-    return by_reg
+    return by_reg, sweep_ok
 
 
 def _extract_timing(flight):
@@ -812,6 +1030,8 @@ def resolve_missing_sectors_via_details(fr, by_reg, hub_schedule):
     f.origin_airport_iata / f.destination_airport_iata in place.
     """
     for reg, f in by_reg.items():
+        if getattr(f, "is_held", False):
+            continue  # held stand-in, not a live flight FR24 can look up
         if f.on_ground or sector_of(f) or reg in hub_schedule:
             continue
         try:
@@ -966,9 +1186,17 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             dest_code = sector.split("-")[1] if sector else None
             orig_code = sector.split("-")[0] if sector else None
             eta_fields = build_eta_fields(hub_schedule, reg, sector)
+            held = bool(getattr(f, "is_held", False))
+            seen_ts = getattr(f, "last_seen_ts", None)
+            lost_sec = int(max(0, datetime.datetime.now().timestamp() - seen_ts)) if (held and seen_ts) else 0
             records.append({
                 "registration": reg,
                 "status": "air",
+                # True when the feed has briefly lost this aircraft and the
+                # card shows its last real sighting rather than a live one.
+                "signal_lost": held,
+                "signal_lost_seconds": lost_sec if held else None,
+                "last_seen_time": _fmt_nepal_dt(seen_ts) if held else None,
                 "sector": sector,
                 "sector_label": sector_label_of(sector),
                 "sector_source": source if sector else "unknown",
@@ -984,7 +1212,7 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
                 "current_airport": None,
                 "current_airport_label": None,
                 "position": [f.latitude, f.longitude] if f.latitude is not None and f.longitude is not None else None,
-                "position_is_live": True,
+                "position_is_live": not held,
                 "heading": f.heading,
                 "origin_coords": airport_coords(orig_code),
                 "destination_coords": airport_coords(dest_code),
@@ -1053,6 +1281,12 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             gps_airport = nearest_airport(f.latitude, f.longitude)
             if gps_airport:
                 current_code = gps_airport
+        else:
+            # Not in the feed now, but we watched it come down near this
+            # airport just before it disappeared (see AirHold).
+            gs_entry = ground_since.get(reg) or {}
+            if gs_entry.get("source") == "inferred" and gs_entry.get("airport"):
+                current_code = gs_entry["airport"]
         eta_fields = build_eta_fields(hub_schedule, reg, sector)
 
         # When this aircraft arrived, from the tracker's own record (see
@@ -1089,6 +1323,9 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
             "callsign": (f.callsign if f is not None else None)
                         or (board.get("callsign") if sector else None),
             "altitude_ft": None,
+            "signal_lost": False,
+            "signal_lost_seconds": None,
+            "last_seen_time": None,
             "ground_speed_kt": ground_speed,
             "vertical_speed_fpm": None,
             "phase": None,
@@ -1137,6 +1374,13 @@ def fetch_positions(fr):
     at a rate that risks getting rate-limited or blocked entirely.
     """
     return fetch_tracked_flights(fr)
+
+
+def fetch_positions_ex(fr):
+    """Like fetch_positions, but also returns whether the en-route sweep
+    succeeded: (by_reg, sweep_ok). Used by api_server.py so a failed
+    sweep can't be mistaken for the whole airborne fleet landing."""
+    return fetch_tracked_flights_ex(fr)
 
 
 def fetch_enrichment(fr, by_reg):

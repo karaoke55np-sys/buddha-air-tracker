@@ -74,8 +74,23 @@ loadData();
 // ==================== AUTO-START THE PYTHON FLEET TRACKER ====================
 const PYTHON_SCRIPT = path.join(__dirname, 'api_server.py');
 let fleetProcess = null;
+let shuttingDown = false;
+let restartDelayMs = 5000;          // grows on repeated quick crashes, max 60s
+let fleetStartedAt = 0;
+let restartTimer = null;
+
+function scheduleFleetRestart(reason) {
+    if (shuttingDown || restartTimer) return;
+    console.error(`⚠️  Fleet tracker ${reason}. Restarting in ${Math.round(restartDelayMs / 1000)}s...`);
+    restartTimer = setTimeout(() => {
+        restartTimer = null;
+        startFleetTracker();
+    }, restartDelayMs);
+    restartDelayMs = Math.min(restartDelayMs * 2, 60000);
+}
 
 function startFleetTracker() {
+    if (shuttingDown) return;
     if (!fs.existsSync(PYTHON_SCRIPT)) {
         console.warn(`⚠️  api_server.py not found at ${PYTHON_SCRIPT} -- Live Tracker tab will be unavailable.`);
         return;
@@ -95,6 +110,7 @@ function startFleetTracker() {
         }
     });
     fleetProcess = child;
+    fleetStartedAt = Date.now();
 
     child.stdout.on('data', (data) => {
         data.toString().split('\n').filter(Boolean).forEach(line => console.log(`[fleet-api] ${line}`));
@@ -104,20 +120,21 @@ function startFleetTracker() {
     });
 
     child.on('error', (err) => {
-        console.error(`⚠️  Fleet tracker process error: ${err.message}`);
-        // On Render, we can't spawn Python, but we'll keep trying
-        if (IS_RENDER) {
-            console.log('🔄 Retrying Python fleet tracker in 30 seconds...');
-            setTimeout(startFleetTracker, 30000);
-        }
+        // Usually "python not found". Keep retrying (slowly) rather than
+        // leaving the Live Tracker dead until someone restarts Node.
+        fleetProcess = null;
+        scheduleFleetRestart(`could not start (${err.message})`);
     });
 
     child.on('exit', (code, signal) => {
         fleetProcess = null;
-        if (code !== null && code !== 0) {
-            console.error(`⚠️  Fleet tracker exited with code ${code}. Restarting in 30s...`);
-            setTimeout(startFleetTracker, 30000);
-        }
+        if (shuttingDown) return;
+        // Restart on ANY unexpected exit -- including being killed by a
+        // signal (e.g. out of memory), where `code` is null. Previously
+        // only a non-zero exit code was restarted, so a killed tracker
+        // stayed dead for good.
+        if (Date.now() - fleetStartedAt > 5 * 60 * 1000) restartDelayMs = 5000;
+        scheduleFleetRestart(`stopped (code ${code}, signal ${signal})`);
     });
 }
 
@@ -125,6 +142,7 @@ function startFleetTracker() {
 setTimeout(startFleetTracker, 3000);
 
 function stopFleetTracker() {
+    shuttingDown = true;
     if (fleetProcess) {
         console.log('🐍 Stopping fleet tracker...');
         fleetProcess.kill();
@@ -487,13 +505,27 @@ app.get('/api/flights', async (req, res) => {
     });
 });
 
+// Last good answer from the Python tracker. While Python is restarting,
+// the page keeps getting this (marked as not fresh) instead of an empty
+// fleet -- an empty answer is what made every card vanish and the whole
+// picture start again from zero.
+let lastFleetData = null;
+
 app.get('/api/fleet-status', async (req, res) => {
     try {
         const response = await axios.get(FLEET_API_URL, { timeout: 8000 });
-        res.json(response.data);
+        const data = response.data || {};
+        if (Array.isArray(data.records) && data.records.length > 0) lastFleetData = data;
+        res.json(data);
     } catch (error) {
         const errDetail = error.code || error.message || (error.response && `HTTP ${error.response.status}`) || 'unknown error';
         console.error(`⚠️  Live tracker proxy error [${errDetail}] -- is 'python api_server.py' running on port 5051?`);
+        if (lastFleetData) {
+            return res.json({
+                ...lastFleetData,
+                error: 'Live tracker is restarting -- showing the last known fleet data until it is back.',
+            });
+        }
         res.status(502).json({
             updated: null,
             counts: { air: 0, ground: 0 },
@@ -541,4 +573,4 @@ server.listen(PORT, () => {
     ║                                                              ║
     ╚══════════════════════════════════════════════════════════════╝
     `);
-});
+});
