@@ -9,7 +9,9 @@ implementation instead of drifting apart.
 
 import os
 import json
+import time
 import datetime
+import threading
 
 # ----------------------------------------------------------------------
 # CONFIG
@@ -170,6 +172,50 @@ def nepal_now_str():
 
 
 TAXI_SPEED_KT = 3
+
+# ----------------------------------------------------------------------
+# Request pacing
+# ----------------------------------------------------------------------
+# FlightRadar24 answers HTTP 429 when requests arrive in a quick burst
+# from one address -- the log showed the first query of every cycle
+# succeeding and the next three, sent immediately after, all refused.
+# Every request to FlightRadar24 from any part of this app goes through
+# _pace(), which keeps at least FR24_MIN_GAP_SEC between them.
+FR24_MIN_GAP_SEC = 2.5
+_pace_lock = threading.Lock()
+_last_request_at = [0.0]
+
+
+def _pace():
+    with _pace_lock:
+        wait = _last_request_at[0] + FR24_MIN_GAP_SEC - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at[0] = time.time()
+
+
+def is_rate_limited_error(exc):
+    text = str(exc).lower()
+    return "429" in text or "too many requests" in text
+
+
+# Ground position queries: KTM (the hub) every cycle, the secondary
+# airports taking turns, so one cycle is 3 requests instead of 4.
+_zoom_turn = [0]
+
+# Below this speed, within ON_AIRPORT_KM of an airport, an aircraft is on
+# the ground even if the feed's air/ground flag says otherwise.
+GROUND_SPEED_MAX_KT = 50
+
+# An aircraft last seen parked at a flight's ORIGIN with that flight plan
+# loaded is assumed to have flown it once this much time has passed
+# (longest domestic sector is ~1h; this leaves room for delays).
+PARKED_PLAN_ASSUMED_FLOWN_SEC = 2 * 3600
+
+# A flight that departed this long ago has landed, whatever FlightRadar24
+# still says about it (its tracking sometimes never records the landing).
+STALE_DEPARTURE_SEC = 3 * 3600
+ON_AIRPORT_KM = 4
 
 # How far into the future a departures-board entry can be and still be
 # trusted for its tail assignment. Beyond this, FR24 sometimes shows a
@@ -336,7 +382,7 @@ def save_ground_since(ground_since):
 
 
 def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts,
-                        inferred_landings=None):
+                        inferred_landings=None, history=None):
     """
     Maintains {registration: {"ts": epoch, "source": "board"|"observed"|"inferred"}}
     -- when each currently-grounded aircraft arrived.
@@ -370,7 +416,8 @@ def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts,
         if reg in prev_air:
             prev_air.discard(reg)
             if f is not None:
-                ground_since[reg] = {"ts": now_ts, "source": "observed"}
+                ground_since[reg] = {"ts": now_ts, "source": "observed",
+                                     "airport": nearest_airport(f.latitude, f.longitude)}
             elif reg in inferred_landings:
                 ground_since[reg] = {"ts": inferred_landings[reg]["ts"], "source": "inferred",
                                      "airport": inferred_landings[reg].get("airport")}
@@ -383,6 +430,17 @@ def update_ground_since(ground_since, prev_air, by_reg, hub_schedule, now_ts,
             cur = ground_since.get(reg)
             if cur is None or landing["ts"] >= cur["ts"] - 120:
                 ground_since[reg] = {"ts": landing["ts"], "source": "board"}
+
+        # The aircraft's own flight history: FlightRadar24's recorded
+        # touchdown for its last flight. Fills in aircraft that landed
+        # before the tracker started, at any airport.
+        if f is None or f.on_ground:
+            hl = history_last_done(history, reg, now_ts)
+            if hl and hl.get("ts_exact", True):
+                cur = ground_since.get(reg)
+                if cur is None or hl["ts"] >= cur["ts"] - 120:
+                    ground_since[reg] = {"ts": hl["ts"], "source": "board",
+                                         "airport": hl.get("at_airport")}
     return ground_since
 
 
@@ -502,6 +560,172 @@ class AirHold:
         return inferred
 
 
+# ----------------------------------------------------------------------
+# Per-aircraft flight history (what FlightRadar24's own app shows)
+# ----------------------------------------------------------------------
+# When you tap a parked aircraft in the official FlightRadar24 app, the
+# sector it shows comes from that AIRCRAFT's flight history -- not from an
+# airport board. The boards we read only cover KTM/PHH/BIR and only the
+# flights nearest "now", so an aircraft that landed before the tracker
+# started (or landed at BWA, KEP, BDP...) had nothing to go on and showed
+# "Sector unknown". This looks the history up per registration, slowly
+# (a few aircraft per minute), and keeps the result on disk.
+
+AIRCRAFT_HISTORY_URL = "https://api.flightradar24.com/common/v1/flight/list.json"
+HISTORY_FILE = os.path.join(DATA_DIR, "buddha_air_aircraft_history.json")
+HISTORY_MAX_AGE_SEC = 24 * 3600     # landings older than this aren't shown
+
+
+def _http_get_json(url, params, timeout=12):
+    """GET a FlightRadar24 JSON endpoint the same way FlightRadarAPI does
+    (browser-like TLS via curl_cffi, which FlightRadarAPI already
+    installs), falling back to plain requests if curl_cffi isn't there."""
+    headers = {
+        "accept": "application/json",
+        "accept-language": "en-US,en;q=0.9",
+        "origin": "https://www.flightradar24.com",
+        "referer": "https://www.flightradar24.com/",
+        "user-agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+    }
+    _pace()
+    try:
+        from curl_cffi import requests as creq
+        r = creq.get(url, params=params, headers=headers, timeout=timeout, impersonate="chrome")
+    except ImportError:
+        import requests as creq
+        r = creq.get(url, params=params, headers=headers, timeout=timeout)
+    if r.status_code == 429:
+        raise RuntimeError("HTTP Error 429: Too Many Requests")
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP Error {r.status_code}")
+    return r.json()
+
+
+def parse_aircraft_history(raw, now_ts=None):
+    """
+    Turns FlightRadar24's per-registration flight list into
+      {"last_done": {...} | None, "next": {...} | None, "live": {...} | None}
+    last_done = the most recent flight that really landed:
+      {"sector", "status", "callsign", "ts" (landing time), "at_airport"}
+    next      = the next flight it hasn't departed yet (for reference).
+    live      = a flight that has departed but not landed.
+    """
+    now_ts = now_ts or datetime.datetime.now().timestamp()
+    rows = _dig(raw, "result", "response", "data") or []
+    last_done = nxt = live = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        o = _dig(row, "airport", "origin", "code", "iata")
+        d = _dig(row, "airport", "destination", "code", "iata")
+        # A diversion lands somewhere else -- that's where it really is.
+        real_d = _dig(row, "airport", "real", "code", "iata")
+        sector = f"{o}-{d}" if (o and d) else None
+        if not _is_plausible_sector(sector):
+            continue
+        dep_real = _dig(row, "time", "real", "departure")
+        arr_real = _dig(row, "time", "real", "arrival")
+        dep_sched = _dig(row, "time", "scheduled", "departure")
+        status = (_dig(row, "status", "text") or "").strip()
+        generic = (_dig(row, "status", "generic", "status", "text") or "").lower()
+        is_live = bool(_dig(row, "status", "live"))
+        callsign = _dig(row, "identification", "callsign")
+
+        landed_ts = arr_real
+        if not landed_ts and dep_real and not is_live:
+            est_arr = (_dig(row, "status", "generic", "eventTime", "utc")
+                       or _dig(row, "time", "estimated", "arrival")
+                       or _dig(row, "time", "other", "eta"))
+            sched_arr = _dig(row, "time", "scheduled", "arrival")
+            said_landed = generic in ("landed", "arrived") or status.lower().startswith(("landed", "arrived"))
+            if said_landed:
+                landed_ts = est_arr or sched_arr or dep_real
+            elif (est_arr or sched_arr) and (est_arr or sched_arr) < now_ts - 20 * 60:
+                # Departed, not live any more, and due 20+ min ago: it has
+                # landed even though FR24 never stamped an arrival time
+                # (common at small Nepali airports).
+                landed_ts = est_arr or sched_arr
+
+        ts_exact = True
+        if not landed_ts and dep_real and dep_real < now_ts - STALE_DEPARTURE_SEC:
+            # Departed hours ago and FlightRadar24 never recorded the
+            # landing (it lost the track -- e.g. AJX's BHA614 PHH->KTM still
+            # "Estimated 15:30" at 23:30). No sector in this network is
+            # anywhere near that long, so it has landed; we just don't know
+            # exactly when, so no "Landed HH:MM" time is shown for it.
+            landed_ts = dep_real
+            ts_exact = False
+            status = "Landed (time not recorded by FlightRadar24)"
+
+        if landed_ts and landed_ts <= now_ts + 300:
+            if last_done is None or landed_ts > last_done["ts"]:
+                at = real_d if (real_d and real_d in AIRPORT_ALL_COORDS) else d
+                last_done = {"sector": sector, "status": status or "Landed",
+                             "callsign": callsign, "ts": landed_ts, "at_airport": at,
+                             "ts_exact": ts_exact}
+        elif dep_real and not landed_ts:
+            if live is None or dep_real > live["ts"]:
+                live = {"sector": sector, "status": status, "callsign": callsign, "ts": dep_real}
+        elif not dep_real and dep_sched and dep_sched >= now_ts - 3 * 3600:
+            if nxt is None or dep_sched < nxt["ts"]:
+                nxt = {"sector": sector, "status": status or "Scheduled",
+                       "callsign": callsign, "ts": dep_sched}
+    return {"last_done": last_done, "next": nxt, "live": live}
+
+
+HISTORY_DEBUG_DIR = os.path.join(DATA_DIR, "buddha_air_history_debug")
+
+
+def fetch_aircraft_history(reg, limit=10):
+    raw = _http_get_json(AIRCRAFT_HISTORY_URL, {
+        "query": reg.lower(), "fetchBy": "reg", "page": 1, "limit": limit,
+    })
+    out = parse_aircraft_history(raw)
+    if not out.get("last_done"):
+        # Keep FlightRadar24's raw answer so a "none found" can be checked
+        # by hand (send this file if an aircraft keeps showing none).
+        try:
+            os.makedirs(HISTORY_DEBUG_DIR, exist_ok=True)
+            _atomic_write_json(os.path.join(HISTORY_DEBUG_DIR, f"{reg}.json"), raw, indent=1)
+        except Exception:
+            pass
+    out["fetched_at"] = datetime.datetime.now().timestamp()
+    return out
+
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        # Entries with no completed flight are dropped so they're looked
+        # up again straight away (they may come from an older version of
+        # the reader that couldn't recognise the landing).
+        return {k: v for k, v in data.items()
+                if k in FLEET and isinstance(v, dict) and v.get("last_done")}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"[history load failed] {e}")
+        return {}
+
+
+def save_history(history):
+    try:
+        _atomic_write_json(HISTORY_FILE, history)
+    except Exception as e:
+        print(f"[history save failed] {e}")
+
+
+def history_last_done(history, reg, now_ts=None):
+    """The aircraft's last completed flight from its history, if recent."""
+    now_ts = now_ts or datetime.datetime.now().timestamp()
+    ld = (history or {}).get(reg, {}).get("last_done")
+    if ld and ld.get("ts") and now_ts - HISTORY_MAX_AGE_SEC <= ld["ts"] <= now_ts + 300:
+        return ld
+    return None
+
+
 def load_hub_schedule():
     """Last schedule-board snapshot saved to disk, if it is recent enough
     to trust. Without this, every restart left the board data empty until
@@ -585,11 +809,21 @@ def fetch_tracked_flights(fr):
     return fetch_tracked_flights_ex(fr)[0]
 
 
+def zoom_airports_this_cycle():
+    """KTM every cycle; PHH and BIR alternate."""
+    others = [c for c in AIRPORT_COORDS if c != HUB_AIRPORT]
+    pick = others[_zoom_turn[0] % len(others)] if others else None
+    _zoom_turn[0] += 1
+    return [HUB_AIRPORT] + ([pick] if pick else [])
+
+
 def fetch_tracked_flights_ex(fr):
     """
-    Returns (by_reg, sweep_ok). sweep_ok is False when the en-route sweep
-    failed this cycle -- in that case an airborne aircraft missing from
-    by_reg says nothing about whether it landed.
+    Returns (by_reg, sweep_ok, rate_limited). sweep_ok is False when the
+    en-route sweep failed this cycle -- in that case an airborne aircraft
+    missing from by_reg says nothing about whether it landed.
+    rate_limited is True if FlightRadar24 refused ANY query with HTTP 429,
+    so the caller can slow down (not only when every query failed).
 
     Combines several position queries per cycle:
 
@@ -620,11 +854,15 @@ def fetch_tracked_flights_ex(fr):
         if f.registration in FLEET:
             sightings.setdefault(f.registration, []).append(f)
 
-    for code, (lat, lon) in AIRPORT_COORDS.items():
+    zoomed = []
+    for code in zoom_airports_this_cycle():
+        lat, lon = AIRPORT_COORDS[code]
         try:
             bounds = fr.get_bounds_by_point(lat, lon, TAXI_WATCH_RADIUS_KM * 1000)
+            _pace()
             for f in fr.get_flights(bounds=bounds):
                 record(f)
+            zoomed.append(code)
         except Exception as e:
             failures.append((f"airport-zoom {code}", e))
             print(f"[airport-zoom fetch failed for {code}] {e}")
@@ -633,6 +871,7 @@ def fetch_tracked_flights_ex(fr):
     try:
         n, s_, w, e_ = SWEEP_BOUNDS
         bounds = f"{n},{s_},{w},{e_}"
+        _pace()
         for f in fr.get_flights(bounds=bounds):
             record(f)
     except Exception as e:
@@ -645,7 +884,7 @@ def fetch_tracked_flights_ex(fr):
     # rate-limiting us (HTTP 429) must not be allowed to masquerade as a
     # full fleet of grounded aircraft with no sectors. Raise instead, so
     # the caller keeps showing the last good snapshot and backs off.
-    if failures and len(failures) == len(AIRPORT_COORDS) + 1:
+    if failures and not zoomed and not sweep_ok:
         raise RuntimeError(f"every position query failed ({failures[0][0]}: {failures[0][1]})")
 
     by_reg = {}
@@ -653,7 +892,20 @@ def fetch_tracked_flights_ex(fr):
         on_ground_sightings = [f for f in flights if f.on_ground]
         by_reg[reg] = on_ground_sightings[0] if on_ground_sightings else flights[0]
 
-    return by_reg, sweep_ok
+    # FlightRadar24's air/ground flag flickers during landing roll and
+    # taxi -- the altitude it reports there is the airport's own height
+    # (KTM is ~4,400 ft), so a plane rolling out at KTM could flip back
+    # to "In the Air / CRUISE" for a poll or two. No aircraft in this
+    # fleet flies below ~90 kt, so anything slower than that sitting on
+    # top of an airport is on the ground, whatever the flag says.
+    for f in by_reg.values():
+        if not f.on_ground and f.ground_speed is not None \
+                and f.ground_speed < GROUND_SPEED_MAX_KT \
+                and nearest_airport(f.latitude, f.longitude, max_km=ON_AIRPORT_KM):
+            f.on_ground = True
+
+    rate_limited = any(is_rate_limited_error(e) for _, e in failures)
+    return by_reg, sweep_ok, rate_limited
 
 
 def _extract_timing(flight):
@@ -740,6 +992,7 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
         apart from a tentative one further out.
     """
     try:
+        _pace()
         raw = fr.get_airport_details(airport_code, flight_limit=100)
     except Exception as e:
         print(f"[schedule fetch failed for {airport_code}] {e}")
@@ -796,6 +1049,14 @@ def _fetch_single_airport_schedule(fr, airport_code, best_ts, result, landings=N
                 )
             else:  # arrivals
                 already_happened = "land" in status.lower()
+
+            # Departed hours ago but never marked landed/departed on the
+            # board (FR24 lost the track): it has happened. Without this a
+            # long-dead "Estimated 15:30" entry ranked as AJX's "imminent"
+            # next flight at 23:30 and kept it at PHH.
+            if not already_happened and ts and ts < now_ts - STALE_DEPARTURE_SEC \
+                    and _dig(flight, "time", "real", "departure"):
+                already_happened = True
 
             # Remember this aircraft's most recent REAL landing seen on any
             # board, independent of which entry ends up "best" below -- a
@@ -1035,6 +1296,7 @@ def resolve_missing_sectors_via_details(fr, by_reg, hub_schedule):
         if f.on_ground or sector_of(f) or reg in hub_schedule:
             continue
         try:
+            _pace()
             details = fr.get_flight_details(f)
         except Exception as e:
             print(f"[flight details fetch failed for {reg}] {e}")
@@ -1056,6 +1318,15 @@ def resolve_missing_sectors_via_details(fr, by_reg, hub_schedule):
 # cover) could keep showing a sector from many hours or days ago,
 # indefinitely, with no way to tell it's outdated.
 CACHE_MAX_AGE_HOURS = 12
+
+
+def _nepal_str_to_epoch(text):
+    """'YYYY-mm-dd HH:MM:SS' written in Nepal time -> epoch seconds."""
+    try:
+        dt = datetime.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=NEPAL_TZ).timestamp()
+    except Exception:
+        return None
 
 
 def _cache_entry_is_fresh(entry):
@@ -1114,7 +1385,7 @@ def _current_airport_for_ground(sector, source, note, has_landed=None, cache_ent
     return None
 
 
-def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=None):
+def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=None, history=None):
     """
     Returns a list of dicts, one per FLEET registration, e.g.:
 
@@ -1163,12 +1434,11 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
     for reg in FLEET:
         f = by_reg.get(reg)
         board = hub_schedule.get(reg) or {}
-        last_done = board.get("last_done") or None
+        board_done = board.get("last_done") or None
+        hist_done = history_last_done(history, reg)
         # An imminent next flight takes over from the completed one, so
         # the card describes what this aircraft is doing now rather than
         # a landing from hours ago.
-        if board.get("tier") == "imminent":
-            last_done = None
         planned = bool(board) and not board.get("confirmed", True)
 
         if f is not None and not f.on_ground:
@@ -1233,60 +1503,94 @@ def build_fleet_records(by_reg, cache, hub_schedule, timestamp, ground_since=Non
         # from the sector's shape.
         board_at = None
 
+        gs_entry = ground_since.get(reg) or {}
+
         if sector:
             source = "live"
             note = f"Taxiing at {ground_speed} kt (callsign {f.callsign or '-'})" if is_taxiing \
                 else f"On ground, flight plan active (callsign {f.callsign or '-'})"
-        elif last_done and _is_plausible_sector(last_done["sector"]):
-            # Board knows the flight this aircraft just landed from, and
-            # where that put it. A parked aircraft is at the destination
-            # of the flight it last completed -- that is the sector to
-            # show, not a future rotation it hasn't started yet.
-            sector = last_done["sector"]
-            source = "board"
-            board_at = last_done.get("at_airport")
-            note = last_done.get("status") or "On ground"
-        elif reg in cache and _cache_entry_is_fresh(cache[reg]) and _is_plausible_sector(cache[reg]["sector"]):
-            # We personally watched this one flying this sector recently;
-            # that is evidence, and it outranks a future rotation that
-            # may still be reassigned to another airframe.
-            sector = cache[reg]["sector"]
-            source = "cache"
-            note = f"Last seen on this sector at {cache[reg]['updated']}"
-            # Which airport we last observed it parked at, if we have that.
-            board_at = _current_airport_for_ground(
-                sector, "cache", note, cache_entry=cache[reg])
-        elif board and _is_plausible_sector(board.get("sector")):
-            # Nothing completed or recently observed is known, but the
-            # board does show this aircraft on a flight: its next
-            # rotation, and (being the origin side of that flight) the
-            # airport it is parked at. Shown at reduced confidence and
-            # labelled as such -- "nothing at all" is the worse answer.
-            sector = board["sector"]
-            source = "board_provisional" if planned else "board"
-            board_at = sector.split("-")[0]
-            note = board.get("status")
         else:
-            sector = None
-            source = "unknown"
-            note = "No sector data yet"
+            # Every piece of evidence about the flight this aircraft last
+            # completed, each with the time it refers to. The NEWEST one
+            # wins. A fixed order (board/history first, our own sighting
+            # last) is what showed an aircraft that had just landed at
+            # KTM under the airport its PREVIOUS flight went to: the
+            # history lookup was older than what we had just watched.
+            evidence = []
+            if board_done and _is_plausible_sector(board_done.get("sector")):
+                evidence.append((board_done.get("ts") or 0, board_done["sector"], "board",
+                                 board_done.get("at_airport"), board_done.get("status") or "On ground"))
+            if hist_done:
+                evidence.append((hist_done["ts"], hist_done["sector"], "history",
+                                 hist_done.get("at_airport"), hist_done.get("status") or "Landed"))
+            ce = cache.get(reg)
+            if ce and _cache_entry_is_fresh(ce) and _is_plausible_sector(ce.get("sector")):
+                seen = _nepal_str_to_epoch(ce.get("updated")) or 0
+                o_code, d_code = ce["sector"].split("-")
+                at = ce.get("at_airport") if ce.get("on_ground_when_seen") else d_code
+                note = f"Last seen on this sector at {ce.get('updated')}"
+                if ce.get("on_ground_when_seen") and at == o_code \
+                        and time.time() - seen > PARKED_PLAN_ASSUMED_FLOWN_SEC:
+                    # We last saw it parked at the origin with this flight
+                    # plan loaded, ready to go -- and that was long ago.
+                    # Every sector in this network is far shorter than
+                    # that, so it has flown it and is at the destination.
+                    at = d_code
+                    note = f"Seen ready to depart {o_code} at {ce.get('updated')}, so assumed flown to {d_code}"
+                evidence.append((seen, ce["sector"], "cache", at, note))
+
+            best = max(evidence, key=lambda e: e[0]) if evidence else None
+            here = best[3] if best else None
+            # Our own record of where it touched down beats an older
+            # inference about its location.
+            if gs_entry.get("airport") and (best is None or (gs_entry.get("ts") or 0) >= best[0] - 120):
+                here = gs_entry["airport"]
+
+            # A next flight that's about to depart is worth showing -- but
+            # only if it departs from where the aircraft actually is. An
+            # "imminent" PHH-KTM entry for an aircraft standing at KTM is
+            # really the flight it just finished (worded unexpectedly on
+            # the board), not its next one.
+            imminent_ok = (
+                board.get("tier") == "imminent"
+                and _is_plausible_sector(board.get("sector"))
+                and (here is None or board["sector"].split("-")[0] == here)
+            )
+
+            if imminent_ok:
+                sector = board["sector"]
+                source = "board"
+                board_at = sector.split("-")[0]
+                note = board.get("status")
+            elif best:
+                _, sector, source, board_at, note = best
+                if here:
+                    board_at = here
+            elif board and _is_plausible_sector(board.get("sector")) \
+                    and (here is None or board["sector"].split("-")[1 if board.get("tier") == "done" else 0] == here):
+                # Nothing completed or recently observed is known, but the
+                # board shows this aircraft's next rotation -- shown at
+                # reduced confidence and labelled as such.
+                sector = board["sector"]
+                source = "board_provisional" if planned else "board"
+                # A flight that has already happened (departed or landed)
+                # left the aircraft at its destination; an upcoming one
+                # means it is waiting at the origin.
+                board_at = sector.split("-")[1] if board.get("tier") == "done" else sector.split("-")[0]
+                note = board.get("status")
+            else:
+                sector = None
+                source = "unknown"
+                board_at = here
+                note = "No sector data yet"
 
         current_code = board_at or _current_airport_for_ground(sector, source, note)
         # A live GPS fix beats every inference above: the airport the
-        # aircraft is physically at IS where it is, whatever the flight
-        # plan on its transponder (often the flight it just finished)
-        # says. Only when there's no fix near a known airport do we fall
-        # back to reasoning from the sector.
+        # aircraft is physically at IS where it is.
         if f is not None:
             gps_airport = nearest_airport(f.latitude, f.longitude)
             if gps_airport:
                 current_code = gps_airport
-        else:
-            # Not in the feed now, but we watched it come down near this
-            # airport just before it disappeared (see AirHold).
-            gs_entry = ground_since.get(reg) or {}
-            if gs_entry.get("source") == "inferred" and gs_entry.get("airport"):
-                current_code = gs_entry["airport"]
         eta_fields = build_eta_fields(hub_schedule, reg, sector)
 
         # When this aircraft arrived, from the tracker's own record (see
@@ -1377,9 +1681,9 @@ def fetch_positions(fr):
 
 
 def fetch_positions_ex(fr):
-    """Like fetch_positions, but also returns whether the en-route sweep
-    succeeded: (by_reg, sweep_ok). Used by api_server.py so a failed
-    sweep can't be mistaken for the whole airborne fleet landing."""
+    """Like fetch_positions, but also returns (by_reg, sweep_ok,
+    rate_limited). Used by api_server.py so a failed sweep can't be
+    mistaken for the whole airborne fleet landing."""
     return fetch_tracked_flights_ex(fr)
 
 
